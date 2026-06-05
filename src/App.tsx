@@ -4,114 +4,68 @@ import {
   commitWeightInput,
   formatWeightInput,
   getProteinRange,
-  normalizeSelectedMuscle,
   normalizeStoredWeight,
   parseSelectValue,
 } from './dashboardLogic'
-
-type Goal = 'spiermassa' | 'vetverlies' | 'onderhoud'
-type Level = 'beginner' | 'gemiddeld' | 'gevorderd'
-type Diet = 'normaal' | 'vegetarisch' | 'lactosevrij'
-type Location = 'gym' | 'thuis'
-type Muscle =
-  | 'borst'
-  | 'rug'
-  | 'schouders'
-  | 'benen'
-  | 'billen'
-  | 'hamstrings'
-  | 'quadriceps'
-  | 'biceps'
-  | 'triceps'
-  | 'core'
-  | 'kuiten'
-  | 'full body'
-
-type Profile = {
-  weight: number
-  goal: Goal
-  days: 3 | 4 | 5 | 6
-  level: Level
-  diet: Diet
-  location: Location
-}
-
-type Exercise = {
-  id: string
-  name: string
-  primary: Muscle
-  secondary: Muscle[]
-  equipment: string
-  sets: string
-  reps: string
-  rest: string
-  purpose: string
-  alternative: string
-  technique: {
-    start: string
-    posture: string
-    steps: string[]
-    range: string
-    breathing: string
-    mistakes: string[]
-    targetTips: string[]
-    injuryTips: string[]
-  }
-}
-
-type TrainingDay = {
-  title: string
-  focus: Muscle[]
-  exercises: Exercise[]
-  isRest?: boolean
-}
-
-type Recipe = {
-  name: string
-  description: string
-  ingredients: string[]
-  portion: string
-  protein: number
-  calories: number
-  labels: Diet[]
-}
-
-type DashboardMetrics = {
-  trainingDays: number
-  restDays: number
-  exerciseCount: number
-  weeklySetLow: number
-  weeklySetHigh: number
-  avgExercises: number
-  proteinMidpoint: number
-  focusCount: number
-  loadLabel: string
-}
-
-type RiskTone = 'good' | 'watch' | 'critical'
-
-type RiskItem = {
-  id: string
-  title: string
-  status: string
-  detail: string
-  actionLabel: string
-  tone: RiskTone
-  onAction: () => void
-}
-
-type LoadChartPoint = {
-  label: string
-  value: number
-  kind: 'training' | 'rest'
-}
+import {
+  buildTrainingPlan,
+  buildWeekSchedule,
+  defaultWeekdaysByDays,
+  exerciseMatchesFocus,
+  getActiveFocuses,
+  getDashboardMetrics,
+  getLoadChartData,
+  getRecoveryWarnings,
+  getVolumeWarnings,
+  normalizeTrainingDays,
+  normalizeWeekdays,
+  reconcileWeekdays,
+  weekdayLabels,
+  weekdays,
+} from './trainingPlanner'
+import type {
+  DashboardMetrics,
+  Diet,
+  Goal,
+  LoadChartPoint,
+  Location,
+  Muscle,
+  PlannedExercise,
+  Profile,
+  Recipe,
+  RecoveryWarning,
+  TechniqueFocus,
+  TrainingDay,
+  TrainingDays,
+  Weekday,
+} from './types'
 
 const STORAGE_KEY = 'personal-gym-dashboard-profile'
+const trainingDayOptions = [1, 2, 3, 4, 5, 6] as const
+const focusOptions: TechniqueFocus[] = [
+  'alles',
+  'borst',
+  'rug',
+  'schouders',
+  'benen',
+  'billen',
+  'hamstrings',
+  'quadriceps',
+  'biceps',
+  'triceps',
+  'core',
+  'kuiten',
+  'compound lifts',
+  'blessurepreventie',
+  'ademhaling / bracing',
+  'range of motion',
+]
 
 const defaultProfile: Profile = {
   weight: 82,
   goal: 'spiermassa',
   days: 4,
+  selectedWeekdays: defaultWeekdaysByDays[4],
   level: 'gemiddeld',
   diet: 'normaal',
   location: 'gym',
@@ -132,587 +86,30 @@ const muscleLabels: Record<Muscle, string> = {
   'full body': 'Full body',
 }
 
-const dayTemplates: Record<Profile['days'], { title: string; focus: Muscle[] }[]> = {
-  3: [
-    { title: 'Dag 1 - Full body kracht', focus: ['benen', 'borst', 'rug', 'core'] },
-    { title: 'Dag 2 - Full body volume', focus: ['rug', 'schouders', 'billen', 'biceps'] },
-    { title: 'Dag 3 - Full body techniek', focus: ['benen', 'borst', 'hamstrings', 'triceps'] },
-  ],
-  4: [
-    { title: 'Dag 1 - Upper push', focus: ['borst', 'schouders', 'triceps'] },
-    { title: 'Dag 2 - Lower body', focus: ['quadriceps', 'hamstrings', 'billen', 'kuiten'] },
-    { title: 'Dag 3 - Upper pull', focus: ['rug', 'biceps', 'schouders'] },
-    { title: 'Dag 4 - Lower en core', focus: ['benen', 'billen', 'core'] },
-  ],
-  5: [
-    { title: 'Dag 1 - Push', focus: ['borst', 'schouders', 'triceps'] },
-    { title: 'Dag 2 - Pull', focus: ['rug', 'biceps'] },
-    { title: 'Dag 3 - Legs', focus: ['quadriceps', 'hamstrings', 'billen', 'kuiten'] },
-    { title: 'Dag 4 - Upper hypertrofie', focus: ['borst', 'rug', 'schouders'] },
-    { title: 'Dag 5 - Lower en core', focus: ['benen', 'billen', 'core'] },
-  ],
-  6: [
-    { title: 'Dag 1 - Push zwaar', focus: ['borst', 'schouders', 'triceps'] },
-    { title: 'Dag 2 - Pull zwaar', focus: ['rug', 'biceps'] },
-    { title: 'Dag 3 - Legs zwaar', focus: ['quadriceps', 'hamstrings', 'billen'] },
-    { title: 'Dag 4 - Push volume', focus: ['borst', 'schouders', 'triceps'] },
-    { title: 'Dag 5 - Pull volume', focus: ['rug', 'biceps', 'core'] },
-    { title: 'Dag 6 - Legs volume', focus: ['benen', 'billen', 'kuiten', 'core'] },
-  ],
+const focusLabels: Record<TechniqueFocus, string> = {
+  alles: 'Alles',
+  borst: 'Borst',
+  rug: 'Rug',
+  schouders: 'Schouders',
+  benen: 'Benen',
+  billen: 'Billen',
+  hamstrings: 'Hamstrings',
+  quadriceps: 'Quadriceps',
+  biceps: 'Biceps',
+  triceps: 'Triceps',
+  core: 'Core',
+  kuiten: 'Kuiten',
+  'full body': 'Full body',
+  'compound lifts': 'Compound lifts',
+  blessurepreventie: 'Blessurepreventie',
+  'ademhaling / bracing': 'Ademhaling / bracing',
+  'range of motion': 'Range of motion',
 }
-
-const weeklyLabels = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo']
-
-const gymExercises: Exercise[] = [
-  {
-    id: 'barbell-bench-press',
-    name: 'Barbell bench press',
-    primary: 'borst',
-    secondary: ['schouders', 'triceps'],
-    equipment: 'Barbell, bench',
-    sets: '3-4',
-    reps: '6-10',
-    rest: '120 sec',
-    purpose: 'Basisbeweging voor kracht en spiermassa in borst, voorste schouder en triceps.',
-    alternative: 'Geen vrije bank vrij? Gebruik chest press machine of dumbbell press.',
-    technique: {
-      start: 'Ga liggen met ogen onder de stang, voeten stevig op de vloer en billen op de bank.',
-      posture: 'Trek je schouderbladen naar achteren en omlaag, borst licht omhoog en polsen recht boven je ellebogen.',
-      steps: [
-        'Pak de stang iets breder dan schouderbreedte.',
-        'Laat de stang gecontroleerd zakken richting onderkant borst.',
-        'Houd ellebogen ongeveer 45 tot 70 graden van je romp.',
-        'Duw de stang omhoog zonder schouders naar voren te laten rollen.',
-      ],
-      range: 'Zak tot de stang licht de borst raakt of tot je schouders comfortabel blijven.',
-      breathing: 'Adem in tijdens het zakken, span je core aan en adem uit voorbij het zwaarste punt omhoog.',
-      mistakes: ['Stuiteren op de borst', 'Schouders optrekken', 'Polsen achterover laten knikken'],
-      targetTips: ['Denk aan je bovenarmen naar elkaar toe duwen', 'Houd spanning tussen schouderbladen en bank'],
-      injuryTips: ['Gebruik een spotter bij zware sets', 'Stop als je scherpe schouderpijn voelt'],
-    },
-  },
-  {
-    id: 'lat-pulldown',
-    name: 'Lat pulldown',
-    primary: 'rug',
-    secondary: ['biceps', 'schouders'],
-    equipment: 'Lat pulldown machine',
-    sets: '3-4',
-    reps: '8-12',
-    rest: '90 sec',
-    purpose: 'Bouwt breedte in de rug en leert je de lats aanspannen.',
-    alternative: 'Geen machine? Doe assisted pull-ups of cable straight-arm pulldowns.',
-    technique: {
-      start: 'Zet de knierol strak, pak de stang iets breder dan schouderbreedte en zit rechtop.',
-      posture: 'Borst hoog, ribben onder controle, schouders laag en nek lang.',
-      steps: [
-        'Start door je schouderbladen omlaag te trekken.',
-        'Trek ellebogen naar je zijzakken in plaats van met je handen te trekken.',
-        'Breng de stang tot bovenkant borst.',
-        'Laat de stang rustig terug omhoog zonder spanning te verliezen.',
-      ],
-      range: 'Volledig strekken bovenin zonder je schouders naar je oren te laten schieten.',
-      breathing: 'Adem uit tijdens het trekken, adem in tijdens de gecontroleerde terugweg.',
-      mistakes: ['Achterover leunen en momentum gebruiken', 'Stang achter de nek trekken', 'Biceps dominant maken'],
-      targetTips: ['Denk aan je oksels naar beneden trekken', 'Pauzeer kort onderin'],
-      injuryTips: ['Houd je onderrug neutraal', 'Forceer geen diepe positie achter de nek'],
-    },
-  },
-  {
-    id: 'leg-press',
-    name: 'Leg press',
-    primary: 'quadriceps',
-    secondary: ['billen', 'hamstrings', 'kuiten'],
-    equipment: 'Leg press machine',
-    sets: '3-4',
-    reps: '10-15',
-    rest: '120 sec',
-    purpose: 'Veilige zware beenoefening voor quadriceps en algemene beenkracht.',
-    alternative: 'Geen leg press? Doe goblet squats of smith machine squats.',
-    technique: {
-      start: 'Plaats voeten op heup- tot schouderbreedte op het platform.',
-      posture: 'Houd onderrug en bekken tegen de zitting, knieën in lijn met tenen.',
-      steps: [
-        'Ontgrendel gecontroleerd en laat het platform zakken.',
-        'Zak tot je knieën diep genoeg buigen zonder dat je bekken kantelt.',
-        'Duw via middenvoet en hiel terug omhoog.',
-        'Strek bovenin bijna volledig, maar vergrendel je knieën niet hard.',
-      ],
-      range: 'Gebruik een diepe, gecontroleerde range zolang je onderrug contact houdt.',
-      breathing: 'Adem in omlaag, span je buik aan en adem uit tijdens het wegduwen.',
-      mistakes: ['Knieën naar binnen laten vallen', 'Te diep zakken met bolle onderrug', 'Halve herhalingen te zwaar laden'],
-      targetTips: ['Voeten lager voor meer quadriceps', 'Voeten hoger voor meer billen en hamstrings'],
-      injuryTips: ['Begin met lichte opwarmsets', 'Houd knieën altijd dezelfde richting als tenen'],
-    },
-  },
-  {
-    id: 'seated-cable-row',
-    name: 'Seated cable row',
-    primary: 'rug',
-    secondary: ['biceps', 'schouders'],
-    equipment: 'Kabelstation',
-    sets: '3',
-    reps: '8-12',
-    rest: '90 sec',
-    purpose: 'Versterkt middenrug, lats en controle over schouderbladen.',
-    alternative: 'Geen kabel? Doe chest-supported dumbbell rows.',
-    technique: {
-      start: 'Zit met lichte kniebuiging, pak de handgreep en maak je romp lang.',
-      posture: 'Neutrale rug, borst open, schouders weg van je oren.',
-      steps: [
-        'Laat je armen volledig voor je strekken.',
-        'Trek eerst je schouderbladen naar achteren.',
-        'Breng de handgreep naar onderkant ribben.',
-        'Laat gecontroleerd terug zonder naar voren te klappen.',
-      ],
-      range: 'Volledige stretch voorin en korte squeeze achterin.',
-      breathing: 'Adem uit bij het trekken, adem in op de terugweg.',
-      mistakes: ['Heen en weer zwaaien met romp', 'Schouders optrekken', 'Polsen buigen om extra te trekken'],
-      targetTips: ['Trek ellebogen langs je lichaam', 'Knijp een seconde tussen je schouderbladen'],
-      injuryTips: ['Vermijd achterover gooien', 'Houd buikspanning gedurende de hele set'],
-    },
-  },
-  {
-    id: 'dumbbell-shoulder-press',
-    name: 'Dumbbell shoulder press',
-    primary: 'schouders',
-    secondary: ['triceps', 'core'],
-    equipment: 'Dumbbells, bench',
-    sets: '3',
-    reps: '8-12',
-    rest: '90 sec',
-    purpose: 'Ontwikkelt schouderkracht en controle boven het hoofd.',
-    alternative: 'Geen dumbbells? Gebruik machine shoulder press.',
-    technique: {
-      start: 'Zit rechtop met dumbbells naast je schouders en voeten stevig op de grond.',
-      posture: 'Ribben laag, core aangespannen, onderarmen verticaal.',
-      steps: [
-        'Duw de dumbbells omhoog in een lichte boog naar elkaar toe.',
-        'Houd ellebogen iets voor je lichaam.',
-        'Laat gecontroleerd terug tot schouderhoogte.',
-        'Blijf stabiel zonder hol te trekken in je onderrug.',
-      ],
-      range: 'Van schouderhoogte tot bijna gestrekte armen bovenin.',
-      breathing: 'Adem in omlaag, adem uit tijdens het drukken.',
-      mistakes: ['Onderug overstrekken', 'Elleboog te ver achter de romp', 'Dumbbells laten botsen bovenin'],
-      targetTips: ['Denk aan omhoog en iets naar binnen duwen', 'Houd spanning op de zijkant van je schouders'],
-      injuryTips: ['Gebruik geen pijnlijke range', 'Kies een gewicht dat je zonder momentum controleert'],
-    },
-  },
-  {
-    id: 'romanian-deadlift',
-    name: 'Romanian deadlift',
-    primary: 'hamstrings',
-    secondary: ['billen', 'rug', 'core'],
-    equipment: 'Barbell of dumbbells',
-    sets: '3-4',
-    reps: '8-10',
-    rest: '120 sec',
-    purpose: 'Versterkt heupscharnier, hamstrings en bilspieren.',
-    alternative: 'Geen barbell? Doe dumbbell RDL of cable pull-through.',
-    technique: {
-      start: 'Sta heupbreed met gewicht voor je dijen en knieën licht gebogen.',
-      posture: 'Rug neutraal, borst trots, schouderbladen rustig naar achteren.',
-      steps: [
-        'Duw je heupen naar achteren alsof je een deur sluit.',
-        'Laat het gewicht dicht langs je benen zakken.',
-        'Stop wanneer je hamstrings duidelijk rekken.',
-        'Duw heupen naar voren en span billen aan om terug te komen.',
-      ],
-      range: 'Tot net onder knie of midden scheen, afhankelijk van mobiliteit zonder rug te bollen.',
-      breathing: 'Adem in en brace voor je zakt, adem uit bovenin na het zwaarste punt.',
-      mistakes: ['Squatten in plaats van heupscharnieren', 'Gewicht van het lichaam af laten gaan', 'Rug rond maken'],
-      targetTips: ['Houd scheenbenen bijna verticaal', 'Voel rek achter je bovenbenen'],
-      injuryTips: ['Begin licht om de hinge te leren', 'Stop de set als je onderrug het overneemt'],
-    },
-  },
-  {
-    id: 'cable-triceps-pressdown',
-    name: 'Cable triceps pressdown',
-    primary: 'triceps',
-    secondary: ['core'],
-    equipment: 'Kabelstation',
-    sets: '3',
-    reps: '10-15',
-    rest: '60 sec',
-    purpose: 'Isoleert triceps voor extra armvolume en lockout-kracht.',
-    alternative: 'Geen kabel? Doe close-grip push-ups.',
-    technique: {
-      start: 'Sta dicht bij de kabel met ellebogen naast je romp.',
-      posture: 'Borst open, schouders laag, polsen recht.',
-      steps: [
-        'Start met onderarmen iets boven parallel.',
-        'Druk het touw of de stang omlaag door je ellebogen te strekken.',
-        'Houd bovenarmen stil naast je lichaam.',
-        'Laat gecontroleerd terug tot je triceps rekken.',
-      ],
-      range: 'Volledig strekken onderin en terug tot net voor spanning verdwijnt.',
-      breathing: 'Adem uit tijdens het omlaag drukken, adem in omhoog.',
-      mistakes: ['Elleboog naar voren laten bewegen', 'Schouders gebruiken', 'Te zwaar en halve reps doen'],
-      targetTips: ['Spreid het touw onderin licht uit', 'Pauzeer kort in volledige strekking'],
-      injuryTips: ['Houd polsen neutraal', 'Vermijd schokkende lockouts'],
-    },
-  },
-  {
-    id: 'dumbbell-curl',
-    name: 'Dumbbell curl',
-    primary: 'biceps',
-    secondary: ['core'],
-    equipment: 'Dumbbells',
-    sets: '3',
-    reps: '10-15',
-    rest: '60 sec',
-    purpose: 'Isoleert de biceps en helpt bij armvolume en trekkracht.',
-    alternative: 'Geen dumbbells? Gebruik cable curls of een EZ-bar curl.',
-    technique: {
-      start: 'Sta rechtop met dumbbells naast je lichaam en handpalmen naar voren.',
-      posture: 'Schouders laag, ellebogen dicht bij je romp, ribben laag en core licht aangespannen.',
-      steps: [
-        'Curl de dumbbells omhoog zonder je bovenarmen naar voren te zwaaien.',
-        'Draai niet met je romp om momentum te maken.',
-        'Knijp bovenin kort in je biceps.',
-        'Laat langzaam zakken tot je armen bijna gestrekt zijn.',
-      ],
-      range: 'Van bijna volledige armstrekking tot maximale buiging zonder schouders op te trekken.',
-      breathing: 'Adem uit tijdens omhoog curlen, adem in tijdens zakken.',
-      mistakes: ['Heupen gebruiken om te zwaaien', 'Elleboog ver naar voren brengen', 'Te snel laten zakken'],
-      targetTips: ['Houd je pink iets hoger dan je duim bovenin', 'Gebruik een tempo van twee tellen omlaag'],
-      injuryTips: ['Houd polsen recht', 'Kies een gewicht waarbij je ellebogen stil blijven'],
-    },
-  },
-  {
-    id: 'cable-crunch',
-    name: 'Cable crunch',
-    primary: 'core',
-    secondary: ['schouders'],
-    equipment: 'Kabelstation',
-    sets: '3',
-    reps: '10-15',
-    rest: '60 sec',
-    purpose: 'Traint buikspieren met progressieve weerstand en gecontroleerde rompflexie.',
-    alternative: 'Geen kabel? Doe weighted dead bugs of plank variations.',
-    technique: {
-      start: 'Kniel voor de kabel met het touw naast je hoofd en heupen stabiel.',
-      posture: 'Houd je bekken licht achterover en voorkom dat je heupen naar achteren bewegen.',
-      steps: [
-        'Start met een lange romp en spanning op de kabel.',
-        'Krul je ribben richting je bekken.',
-        'Laat je ellebogen richting bovenbenen komen.',
-        'Kom gecontroleerd terug zonder volledig te ontspannen.',
-      ],
-      range: 'Beweeg vanuit je romp, niet vanuit je heupen.',
-      breathing: 'Adem krachtig uit tijdens het inkrullen, adem in tijdens terugkomen.',
-      mistakes: ['Heupen naar achteren duwen', 'Alleen met armen trekken', 'Nek naar beneden forceren'],
-      targetTips: ['Denk aan ribben sluiten richting bekken', 'Pauzeer onderin met buikspanning'],
-      injuryTips: ['Gebruik geen gewicht dat je onderrug trekt', 'Houd de beweging langzaam en klein genoeg'],
-    },
-  },
-  {
-    id: 'machine-calf-raise',
-    name: 'Machine calf raise',
-    primary: 'kuiten',
-    secondary: ['benen'],
-    equipment: 'Calf raise machine',
-    sets: '3-4',
-    reps: '12-20',
-    rest: '60 sec',
-    purpose: 'Traint kuitspieren met controle in volledige lengte.',
-    alternative: 'Geen machine? Doe single-leg dumbbell calf raises.',
-    technique: {
-      start: 'Plaats bal van je voet op de rand en houd knieën licht gebogen.',
-      posture: 'Sta lang, core actief, gewicht gelijkmatig over grote teen en kleine teen.',
-      steps: [
-        'Laat je hakken rustig zakken tot je rek voelt.',
-        'Duw jezelf zo hoog mogelijk op je tenen.',
-        'Pauzeer bovenin kort.',
-        'Laat langzaam zakken zonder te veren.',
-      ],
-      range: 'Volledige stretch onderin en maximale contractie bovenin.',
-      breathing: 'Adem rustig door, forceer geen ademstop bij hoge reps.',
-      mistakes: ['Stuiteren', 'Alle druk op buitenkant voet', 'Te weinig range'],
-      targetTips: ['Denk aan omhoog duwen via je grote teen', 'Gebruik een langzaam tempo'],
-      injuryTips: ['Bouw volume geleidelijk op', 'Stop bij achillespees-irritatie'],
-    },
-  },
-]
-
-const homeExercises: Exercise[] = [
-  {
-    id: 'push-up',
-    name: 'Push-up',
-    primary: 'borst',
-    secondary: ['schouders', 'triceps', 'core'],
-    equipment: 'Lichaamsgewicht',
-    sets: '3-4',
-    reps: '8-15',
-    rest: '90 sec',
-    purpose: 'Sterke basisoefening voor borst, triceps en rompstabiliteit.',
-    alternative: 'Te zwaar? Doe incline push-ups met handen op bank of tafel.',
-    technique: {
-      start: 'Plaats handen iets breder dan schouders en voeten achter je in plankpositie.',
-      posture: 'Span billen en buik aan, maak een rechte lijn van hoofd tot hakken.',
-      steps: [
-        'Schroef je handen licht naar buiten in de vloer.',
-        'Laat borst gecontroleerd richting vloer zakken.',
-        'Houd ellebogen schuin langs je lichaam.',
-        'Duw de vloer weg tot je armen bijna gestrekt zijn.',
-      ],
-      range: 'Zak tot borst bijna de vloer raakt of tot je positie stabiel blijft.',
-      breathing: 'Adem in tijdens zakken, adem uit tijdens omhoog duwen.',
-      mistakes: ['Heupen laten doorzakken', 'Elleboog volledig zijwaarts', 'Hoofd naar voren steken'],
-      targetTips: ['Denk aan bovenarmen naar elkaar toe bewegen', 'Pauzeer onderin kort'],
-      injuryTips: ['Houd polsen onder schouders', 'Verhoog je handen als schouders gevoelig zijn'],
-    },
-  },
-  {
-    id: 'band-row',
-    name: 'Resistance band row',
-    primary: 'rug',
-    secondary: ['biceps', 'schouders'],
-    equipment: 'Elastiek',
-    sets: '3-4',
-    reps: '10-15',
-    rest: '75 sec',
-    purpose: 'Thuisalternatief voor rows dat rugspieren en houding versterkt.',
-    alternative: 'Geen elastiek? Doe towel rows aan een stevige deur alleen als dat veilig kan.',
-    technique: {
-      start: 'Bevestig de band op borsthoogte of zit met de band om je voeten.',
-      posture: 'Rug lang, borst open, schouders laag en core licht aangespannen.',
-      steps: [
-        'Start met gestrekte armen en lichte spanning op de band.',
-        'Trek ellebogen naar achteren langs je ribben.',
-        'Knijp je schouderbladen kort samen.',
-        'Laat rustig terug tot je armen strekken.',
-      ],
-      range: 'Van volledige armstrekking tot handen naast je romp.',
-      breathing: 'Adem uit tijdens trekken, adem in tijdens teruggaan.',
-      mistakes: ['Schouders optrekken', 'Band laten terugschieten', 'Polsen naar binnen knikken'],
-      targetTips: ['Denk aan ellebogen naar je achterzakken', 'Houd de squeeze een seconde vast'],
-      injuryTips: ['Controleer of de band stevig vastzit', 'Gebruik geen versleten elastiek'],
-    },
-  },
-  {
-    id: 'goblet-squat',
-    name: 'Goblet squat',
-    primary: 'quadriceps',
-    secondary: ['billen', 'core', 'hamstrings'],
-    equipment: 'Dumbbell of rugzak',
-    sets: '3-4',
-    reps: '10-15',
-    rest: '90 sec',
-    purpose: 'Traint benen met goede squatmechaniek en rompspanning.',
-    alternative: 'Geen gewicht? Doe tempo bodyweight squats met 3 seconden zakken.',
-    technique: {
-      start: 'Houd gewicht tegen je borst, voeten ongeveer schouderbreed.',
-      posture: 'Borst hoog, rug neutraal, knieën volgen de richting van de tenen.',
-      steps: [
-        'Adem in en span je buik alsof je een lichte klap opvangt.',
-        'Zak door heupen en knieën tegelijk te buigen.',
-        'Houd je hele voet op de vloer.',
-        'Duw via middenvoet omhoog en span billen bovenin licht aan.',
-      ],
-      range: 'Zak zo diep als je kunt zonder hakken te liften of rug te bollen.',
-      breathing: 'Adem in omlaag, adem uit omhoog.',
-      mistakes: ['Knieën naar binnen', 'Hakken los', 'Romp laten instorten'],
-      targetTips: ['Duw knieën subtiel naar buiten', 'Houd gewicht dicht tegen je lichaam'],
-      injuryTips: ['Gebruik een stoel als diepte-check', 'Verlaag diepte bij knieklachten'],
-    },
-  },
-  {
-    id: 'reverse-lunge',
-    name: 'Reverse lunge',
-    primary: 'benen',
-    secondary: ['billen', 'quadriceps', 'hamstrings', 'core'],
-    equipment: 'Lichaamsgewicht of dumbbells',
-    sets: '3',
-    reps: '8-12 per been',
-    rest: '75 sec',
-    purpose: 'Verbetert enkelbenige kracht, balans en heupstabiliteit.',
-    alternative: 'Balans lastig? Doe split squats met hand aan muur.',
-    technique: {
-      start: 'Sta rechtop met voeten heupbreed en eventueel dumbbells naast je.',
-      posture: 'Romp lang, core actief, voorste knie boven middenvoet.',
-      steps: [
-        'Stap gecontroleerd achteruit.',
-        'Zak totdat beide knieën ongeveer 90 graden buigen.',
-        'Duw via de hak en middenvoet van je voorste been terug.',
-        'Wissel benen of maak eerst alle reps aan een kant af.',
-      ],
-      range: 'Achterste knie richting vloer zonder hard contact.',
-      breathing: 'Adem in tijdens zakken, adem uit tijdens terugduwen.',
-      mistakes: ['Voorste knie naar binnen', 'Te korte stap', 'Afzetten met achterste been'],
-      targetTips: ['Leun heel licht voorover voor meer bilfocus', 'Houd druk op je voorste voet'],
-      injuryTips: ['Gebruik kleinere passen bij heupklachten', 'Beweeg langzaam genoeg om balans te houden'],
-    },
-  },
-  {
-    id: 'glute-bridge',
-    name: 'Glute bridge',
-    primary: 'billen',
-    secondary: ['hamstrings', 'core'],
-    equipment: 'Lichaamsgewicht of dumbbell',
-    sets: '3-4',
-    reps: '12-20',
-    rest: '60 sec',
-    purpose: 'Leert bilspieren actief te gebruiken zonder veel belasting op de rug.',
-    alternative: 'Te makkelijk? Doe single-leg glute bridges.',
-    technique: {
-      start: 'Lig op je rug met knieën gebogen en voeten plat op heupbreedte.',
-      posture: 'Ribben laag, bekken licht achterover kantelen, kin ontspannen.',
-      steps: [
-        'Duw via je hielen in de vloer.',
-        'Breng heupen omhoog tot je romp en bovenbenen een lijn vormen.',
-        'Knijp billen bovenin twee tellen aan.',
-        'Laat rustig zakken zonder spanning volledig los te laten.',
-      ],
-      range: 'Volledig omhoog zonder onderrug hol te trekken.',
-      breathing: 'Adem uit bij omhoogkomen, adem in bij zakken.',
-      mistakes: ['Duwen via tenen', 'Onderug overstrekken', 'Voeten te ver weg plaatsen'],
-      targetTips: ['Trek tenen licht op voor meer bilgevoel', 'Denk aan bekken naar ribben brengen'],
-      injuryTips: ['Stop bij kramp in hamstrings en zet voeten dichterbij', 'Houd nek ontspannen'],
-    },
-  },
-  {
-    id: 'band-shoulder-press',
-    name: 'Banded shoulder press',
-    primary: 'schouders',
-    secondary: ['triceps', 'core'],
-    equipment: 'Elastiek',
-    sets: '3',
-    reps: '10-15',
-    rest: '75 sec',
-    purpose: 'Bouwt schouderuithoudingsvermogen en controle boven het hoofd.',
-    alternative: 'Geen band? Doe pike push-ups of dumbbell shoulder press.',
-    technique: {
-      start: 'Sta op de band en houd de uiteinden op schouderhoogte.',
-      posture: 'Core strak, ribben laag, ellebogen iets voor je romp.',
-      steps: [
-        'Duw handen omhoog tot boven je hoofd.',
-        'Houd schouders laag en nek ontspannen.',
-        'Laat gecontroleerd terug naar schouderhoogte.',
-        'Blijf rechtop zonder naar achteren te leunen.',
-      ],
-      range: 'Van schouderhoogte tot armen bijna volledig gestrekt.',
-      breathing: 'Adem uit tijdens drukken, adem in terug.',
-      mistakes: ['Hol trekken in onderrug', 'Band scheef belasten', 'Elleboog te ver naar achter'],
-      targetTips: ['Duw recht omhoog met stabiele polsen', 'Gebruik een band met constante controle'],
-      injuryTips: ['Controleer de band onder je voeten', 'Vermijd pijnlijke schouderposities'],
-    },
-  },
-  {
-    id: 'band-biceps-curl',
-    name: 'Banded biceps curl',
-    primary: 'biceps',
-    secondary: ['core'],
-    equipment: 'Elastiek',
-    sets: '3',
-    reps: '12-20',
-    rest: '60 sec',
-    purpose: 'Thuisvriendelijke bicepsoefening met oplopende weerstand bovenin.',
-    alternative: 'Geen band? Gebruik dumbbells, gevulde flessen of een rugzak.',
-    technique: {
-      start: 'Sta op het midden van de band en houd de uiteinden naast je lichaam.',
-      posture: 'Sta lang, schouders laag, ellebogen tegen je zij en polsen recht.',
-      steps: [
-        'Curl je handen omhoog terwijl je ellebogen op dezelfde plek blijven.',
-        'Houd bovenin een korte squeeze.',
-        'Laat langzaam zakken tegen de spanning van de band in.',
-        'Stop net voordat de band volledig slap wordt.',
-      ],
-      range: 'Van bijna gestrekte armen tot handen rond borsthoogte.',
-      breathing: 'Adem uit omhoog, adem in omlaag.',
-      mistakes: ['Naar achter leunen', 'Elleboog laten zweven', 'Band laten terugschieten'],
-      targetTips: ['Maak de band korter voor meer spanning', 'Houd het tempo rustig bovenin'],
-      injuryTips: ['Controleer de band op scheurtjes', 'Houd polsen neutraal om irritatie te vermijden'],
-    },
-  },
-  {
-    id: 'bench-dip',
-    name: 'Bench dip',
-    primary: 'triceps',
-    secondary: ['schouders', 'borst'],
-    equipment: 'Bank, stoel of lage verhoging',
-    sets: '3',
-    reps: '8-15',
-    rest: '75 sec',
-    purpose: 'Traint triceps met lichaamsgewicht en weinig materiaal.',
-    alternative: 'Schouders gevoelig? Doe close-grip push-ups of band pressdowns.',
-    technique: {
-      start: 'Plaats handen op een stevige rand naast je heupen en voeten voor je.',
-      posture: 'Borst open, schouders laag, ellebogen wijzen naar achteren.',
-      steps: [
-        'Schuif heupen net voor de rand.',
-        'Zak recht omlaag door je ellebogen te buigen.',
-        'Stop voordat schouders naar voren trekken.',
-        'Duw jezelf omhoog door ellebogen te strekken.',
-      ],
-      range: 'Zak tot bovenarmen ongeveer parallel zijn of tot schouders comfortabel blijven.',
-      breathing: 'Adem in tijdens zakken, adem uit tijdens omhoogduwen.',
-      mistakes: ['Schouders naar oren trekken', 'Te diep zakken', 'Elleboog wijd naar buiten laten gaan'],
-      targetTips: ['Houd heupen dicht bij de rand', 'Denk aan de rand omlaag duwen'],
-      injuryTips: ['Kies close-grip push-ups bij schouderpijn', 'Gebruik een stabiele stoel die niet kan schuiven'],
-    },
-  },
-  {
-    id: 'dead-bug',
-    name: 'Dead bug',
-    primary: 'core',
-    secondary: ['benen', 'schouders'],
-    equipment: 'Lichaamsgewicht',
-    sets: '3',
-    reps: '8-12 per zijde',
-    rest: '45 sec',
-    purpose: 'Verbetert rompcontrole en leert neutrale rug houden onder beweging.',
-    alternative: 'Te makkelijk? Houd lichte dumbbells vast of vertraag het tempo.',
-    technique: {
-      start: 'Lig op je rug met armen recht omhoog en knieën boven heupen.',
-      posture: 'Druk onderrug zacht richting vloer, ribben laag, nek ontspannen.',
-      steps: [
-        'Span je buik aan zonder je adem vast te zetten.',
-        'Strek langzaam tegenovergestelde arm en been uit.',
-        'Stop voordat je onderrug loskomt van de vloer.',
-        'Keer terug en wissel van zijde.',
-      ],
-      range: 'Alleen zo ver strekken als je onderrug stabiel blijft.',
-      breathing: 'Adem uit tijdens uitstrekken, adem in bij terugkomen.',
-      mistakes: ['Onderug laten bollen', 'Te snel bewegen', 'Schouders optrekken'],
-      targetTips: ['Denk aan rits van broek naar ribben trekken', 'Beweeg traag en stil'],
-      injuryTips: ['Maak de beweging kleiner bij rugklachten', 'Houd hoofd op de vloer'],
-    },
-  },
-  {
-    id: 'plank',
-    name: 'Plank',
-    primary: 'core',
-    secondary: ['schouders', 'billen'],
-    equipment: 'Lichaamsgewicht',
-    sets: '3',
-    reps: '30-60 sec',
-    rest: '45 sec',
-    purpose: 'Bouwt basisstabiliteit voor vrijwel alle krachtoefeningen.',
-    alternative: 'Te zwaar? Doe plank vanaf knieën.',
-    technique: {
-      start: 'Plaats ellebogen onder schouders en voeten achter je.',
-      posture: 'Maak een rechte lijn, span billen aan en trek ribben licht naar beneden.',
-      steps: [
-        'Duw ellebogen zacht in de vloer.',
-        'Span buik en billen tegelijk aan.',
-        'Houd nek neutraal met blik naar de vloer.',
-        'Stop de set voordat je heupen doorzakken.',
-      ],
-      range: 'Statische positie zonder beweging in onderrug.',
-      breathing: 'Blijf kort en rustig ademen achter je buikspanning.',
-      mistakes: ['Heupen te hoog', 'Doorzakken in onderrug', 'Adem vasthouden'],
-      targetTips: ['Denk aan ellebogen naar tenen trekken zonder te bewegen', 'Knijp billen actief aan'],
-      injuryTips: ['Kies kortere sets met perfecte houding', 'Stop bij scherpe lage-rugpijn'],
-    },
-  },
-]
 
 const recipes: Recipe[] = [
   {
     name: 'Kip rijst bowl',
-    description: 'Makkelijke herstelmaaltijd met veel eiwit en koolhydraten.',
+    description: 'Herstelmaaltijd met veel eiwit en koolhydraten.',
     ingredients: ['160 g kipfilet', '125 g gekookte rijst', '200 g wokgroente', '1 el sojasaus'],
     portion: '1 grote bowl',
     protein: 42,
@@ -738,99 +135,64 @@ const recipes: Recipe[] = [
     labels: ['vegetarisch', 'lactosevrij'],
   },
   {
-    name: 'Tonijn aardappel salade',
-    description: 'Lichte maaltijd voor vetverlies met veel verzadiging.',
-    ingredients: ['1 blik tonijn', '250 g gekookte aardappel', 'Komkommer', 'Tomaat', '1 el yoghurtvrije dressing'],
-    portion: '1 salade',
-    protein: 36,
-    calories: 430,
-    labels: ['normaal', 'lactosevrij'],
-  },
-  {
     name: 'Eiwitrijke linzencurry',
-    description: 'Comfortmaaltijd met plantaardige proteine en trage koolhydraten.',
+    description: 'Plantaardige proteine met trage koolhydraten.',
     ingredients: ['200 g linzen', '150 ml kokosmelk light', 'Spinazie', 'Currykruiden', '100 g rijst'],
     portion: '1 diepe kom',
     protein: 28,
     calories: 590,
     labels: ['vegetarisch', 'lactosevrij'],
   },
-  {
-    name: 'Omelet met cottage cheese',
-    description: 'Hartige maaltijd met veel leucine voor spierherstel.',
-    ingredients: ['3 eieren', '150 g cottage cheese', 'Spinazie', 'Paprika', 'Volkoren toast'],
-    portion: '1 omelet',
-    protein: 39,
-    calories: 520,
-    labels: ['normaal', 'vegetarisch'],
-  },
 ]
 
 function App() {
   const [profile, setProfile] = useState<Profile>(() => loadProfile())
-  const [selectedMuscle, setSelectedMuscle] = useState<Muscle | 'alles'>('alles')
+  const [techniqueFocus, setTechniqueFocus] = useState<TechniqueFocus>('alles')
   const [swaps, setSwaps] = useState<Record<string, number>>({})
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(profile))
   }, [profile])
 
-  const plan = useMemo(() => buildPlan(profile, swaps), [profile, swaps])
+  const plan = useMemo(() => buildTrainingPlan(profile, swaps), [profile, swaps])
   const proteinRange = useMemo(() => getProteinRange(profile.weight), [profile.weight])
-  const dashboardMetrics = useMemo(
-    () => getDashboardMetrics(plan, proteinRange, profile),
-    [plan, profile, proteinRange],
-  )
+  const metrics = useMemo(() => getDashboardMetrics(plan, proteinRange, profile), [plan, profile, proteinRange])
   const loadChartData = useMemo(() => getLoadChartData(plan), [plan])
-  const matchingRecipes = useMemo(
-    () => recipes.filter((recipe) => recipe.labels.includes(profile.diet)).slice(0, 4),
-    [profile.diet],
-  )
-  const activeMuscles = useMemo(() => getActiveMuscles(plan), [plan])
-  const selectedMuscleForView = normalizeSelectedMuscle(selectedMuscle, activeMuscles)
+  const schedule = useMemo(() => buildWeekSchedule(plan), [plan])
+  const recoveryWarnings = useMemo(() => getRecoveryWarnings(plan, profile.days), [plan, profile.days])
+  const volumeWarnings = useMemo(() => getVolumeWarnings(plan, profile), [plan, profile])
+  const availableFocuses = useMemo(() => getActiveFocuses(plan), [plan])
+  const selectedFocus = availableFocuses.includes(techniqueFocus) ? techniqueFocus : 'alles'
   const visiblePlan = useMemo(
     () =>
       plan.map((day) => ({
         ...day,
-        exercises:
-          selectedMuscleForView === 'alles'
-            ? day.exercises
-            : day.exercises.filter(
-                (exercise) =>
-                  exercise.primary === selectedMuscleForView ||
-                  exercise.secondary.includes(selectedMuscleForView),
-              ),
+        exercises: day.exercises.filter((exercise) => exerciseMatchesFocus(exercise, selectedFocus)),
       })),
-    [plan, selectedMuscleForView],
+    [plan, selectedFocus],
   )
+  const matchingRecipes = recipes.filter((recipe) => recipe.labels.includes(profile.diet)).slice(0, 3)
 
-  const firstFocus = activeMuscles[0] ?? 'core'
-  const changeProfile = (nextProfile: Profile) => {
-    const nextActiveMuscles = getActiveMuscles(buildPlan(nextProfile, swaps))
-    setSelectedMuscle((current) => normalizeSelectedMuscle(current, nextActiveMuscles))
-    setProfile(nextProfile)
+  function changeProfile(next: Profile) {
+    setProfile({
+      ...next,
+      days: normalizeTrainingDays(next.days),
+      selectedWeekdays: reconcileWeekdays(normalizeTrainingDays(next.days), next.selectedWeekdays),
+    })
   }
-  const riskItems = getRiskItems({
-    changeProfile,
-    firstFocus,
-    metrics: dashboardMetrics,
-    profile,
-    selectedMuscle: selectedMuscleForView,
-    setSelectedMuscle,
-  })
 
   return (
     <main className="app-shell">
       <header className="topbar">
         <div className="topbar-title">
-          <p className="eyebrow">Operationele werkruimte</p>
-          <h1>Training operations</h1>
+          <p className="eyebrow">Persoonlijke generator</p>
+          <h1>Trainingsschema-generator</h1>
         </div>
         <div className="topbar-controls">
           <div className="status-strip" aria-label="Actieve profielstatus">
             <span>{goalLabel(profile.goal)}</span>
             <span>{profile.days} trainingsdagen</span>
-            <span>{dashboardMetrics.restDays} rustdagen</span>
+            <span>{metrics.recoveryQuality} herstel</span>
           </div>
           <LocationToggle
             location={profile.location}
@@ -842,72 +204,66 @@ function App() {
       <section className="operations-grid">
         <ProfileForm profile={profile} onChange={changeProfile} />
         <div className="operations-stack">
-          <KpiPanel metrics={dashboardMetrics} proteinRange={proteinRange} profile={profile} />
-          <RiskOverview items={riskItems} />
+          <KpiPanel metrics={metrics} proteinRange={proteinRange} profile={profile} />
+          <WarningPanel title="Herstelchecks" warnings={[...recoveryWarnings, ...volumeWarnings]} />
         </div>
       </section>
-
-      <OperationsCharts data={loadChartData} metrics={dashboardMetrics} proteinRange={proteinRange} />
 
       <section className="section-block">
         <div className="section-heading">
           <div>
-            <p className="eyebrow">Weekplanning</p>
-            <h2>{profile.days} trainingsdagen per week</h2>
+            <p className="eyebrow">Kalenderstrip</p>
+            <h2>Kies exact {profile.days} trainingsdag{profile.days === 1 ? '' : 'en'}</h2>
           </div>
-          <MuscleFilter muscles={activeMuscles} value={selectedMuscleForView} onChange={setSelectedMuscle} />
+          <span className="panel-badge">Aanbevolen: {defaultWeekdaysByDays[profile.days].map((day) => weekdayLabels[day]).join('/')}</span>
         </div>
-        <WeekOverview days={profile.days} />
+        <WeekdaySelector profile={profile} onChange={changeProfile} warnings={recoveryWarnings} />
+        <WeekOverview schedule={schedule} />
+      </section>
+
+      <OperationsCharts data={loadChartData} metrics={metrics} proteinRange={proteinRange} />
+
+      <section className="section-block">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">Schema</p>
+            <h2>{splitSummary(profile.days)}</h2>
+          </div>
+          <TechniqueFocusFilter value={selectedFocus} onChange={setTechniqueFocus} />
+        </div>
         <div className="training-list">
-          {visiblePlan.map((day, dayIndex) => (
+          {visiblePlan.map((day, index) => (
             <TrainingDayCard
               day={day}
-              dayIndex={dayIndex}
-              key={day.title}
-              location={profile.location}
+              focus={selectedFocus}
+              key={`${day.weekday}-${day.split}`}
+              number={index + 1}
               onSwap={(exercise) =>
-                setSwaps((current) => ({
-                  ...current,
-                  [exercise.id]: (current[exercise.id] ?? 0) + 1,
-                }))
+                setSwaps((current) => ({ ...current, [exercise.id]: (current[exercise.id] ?? 0) + 1 }))
               }
             />
           ))}
         </div>
       </section>
 
-      <section className="section-block anatomy-section">
+      <section className="section-block">
         <div className="section-heading">
           <div>
-            <p className="eyebrow">Anatomie</p>
-            <h2>Spiervisuals</h2>
+            <p className="eyebrow">Volume</p>
+            <h2>Werksets per spiergroep</h2>
           </div>
-          <p className="section-copy">
-            Donker = primaire focus, licht = secundaire ondersteuning. Gebruik dit om bewuster te
-            voelen welke spier de beweging moet sturen.
-          </p>
+          <p className="section-copy">Beginner lager volume, gemiddeld gematigd, gevorderd meer frequentie met herstelcheck.</p>
         </div>
-        <div className="anatomy-grid">
-          {plan.slice(0, 4).map((day) => (
-            <MuscleMap
-              focus={day.focus}
-              key={day.title}
-              primary={day.exercises[0]?.primary ?? 'full body'}
-              title={day.title}
-            />
-          ))}
-        </div>
+        <VolumeGrid totals={metrics.muscleSetTotals} />
       </section>
 
       <section className="section-block">
         <div className="section-heading">
           <div>
             <p className="eyebrow">Voeding</p>
-            <h2>Recepten voor {dietLabel(profile.diet)}</h2>
+            <h2>Proteine en herstel</h2>
           </div>
-          <p className="section-copy">
-            Richt je maaltijden rond eiwit, groente en voldoende energie voor herstel.
-          </p>
+          <p className="section-copy">ISSN-range verwerkt als praktische dagrange voor sportende mensen.</p>
         </div>
         <div className="recipe-grid">
           {matchingRecipes.map((recipe) => (
@@ -917,9 +273,9 @@ function App() {
       </section>
 
       <footer className="disclaimer">
-        Dit dashboard geeft algemene fitnessinformatie en is geen medisch advies. Luister naar je
-        lichaam en raadpleeg bij klachten, blessures of twijfel een arts, fysiotherapeut of
-        gekwalificeerde trainer.
+        Gebruikte richtlijnen: CDC/Physical Activity Guidelines voor minstens 2 dagen spierversterking en grote spiergroepen,
+        Mayo Clinic en NSCA voor herstel tussen dezelfde spiergroepen, ACSM voor 2-3 full-body starts en 8-12 reps,
+        ISSN voor circa 1.4-2.0 g proteine/kg/dag. Dit is algemene fitnessinformatie, geen medisch advies.
       </footer>
     </main>
   )
@@ -928,23 +284,18 @@ function App() {
 function loadProfile(): Profile {
   try {
     const stored = localStorage.getItem(STORAGE_KEY)
-    if (!stored) {
-      return defaultProfile
-    }
+    if (!stored) return defaultProfile
 
     const parsed = JSON.parse(stored) as Partial<Profile>
+    const days = normalizeTrainingDays(parsed.days, defaultProfile.days)
+
     return {
       weight: normalizeStoredWeight(parsed.weight, defaultProfile.weight),
-      goal: isOneOf(parsed.goal, ['spiermassa', 'vetverlies', 'onderhoud'])
-        ? parsed.goal
-        : defaultProfile.goal,
-      days: isOneOf(parsed.days, [3, 4, 5, 6]) ? parsed.days : defaultProfile.days,
-      level: isOneOf(parsed.level, ['beginner', 'gemiddeld', 'gevorderd'])
-        ? parsed.level
-        : defaultProfile.level,
-      diet: isOneOf(parsed.diet, ['normaal', 'vegetarisch', 'lactosevrij'])
-        ? parsed.diet
-        : defaultProfile.diet,
+      goal: isOneOf(parsed.goal, ['spiermassa', 'vetverlies', 'onderhoud']) ? parsed.goal : defaultProfile.goal,
+      days,
+      selectedWeekdays: normalizeWeekdays(parsed.selectedWeekdays, days),
+      level: isOneOf(parsed.level, ['beginner', 'gemiddeld', 'gevorderd']) ? parsed.level : defaultProfile.level,
+      diet: isOneOf(parsed.diet, ['normaal', 'vegetarisch', 'lactosevrij']) ? parsed.diet : defaultProfile.diet,
       location: isOneOf(parsed.location, ['gym', 'thuis']) ? parsed.location : defaultProfile.location,
     }
   } catch {
@@ -956,207 +307,25 @@ function isOneOf<T extends string | number>(value: unknown, options: readonly T[
   return options.includes(value as T)
 }
 
-function buildPlan(profile: Profile, swaps: Record<string, number>): TrainingDay[] {
-  const library = profile.location === 'gym' ? gymExercises : homeExercises
-  const selectedIds = new Set<string>()
-
-  return dayTemplates[profile.days].map((template) => {
-    const exercises = template.focus
-      .flatMap((muscle) => pickExercise(library, muscle, selectedIds, swaps))
-      .filter((exercise): exercise is Exercise => Boolean(exercise))
-      .slice(0, profile.days >= 5 ? 5 : 4)
-
-    return {
-      title: template.title,
-      focus: template.focus,
-      exercises,
-    }
-  })
-}
-
-function getActiveMuscles(plan: TrainingDay[]) {
-  return Array.from(
-    new Set(
-      plan.flatMap((day) =>
-        day.exercises.flatMap((exercise) => [exercise.primary, ...exercise.secondary]),
-      ),
-    ),
-  )
-}
-
-function pickExercise(
-  library: Exercise[],
-  muscle: Muscle,
-  selectedIds: Set<string>,
-  swaps: Record<string, number>,
-) {
-  const options = library.filter(
-    (exercise) =>
-      exercise.primary === muscle ||
-      exercise.secondary.includes(muscle) ||
-      (muscle === 'benen' &&
-        ['quadriceps', 'hamstrings', 'billen', 'kuiten', 'benen'].includes(exercise.primary)),
-  )
-
-  const usable = options.length > 0 ? options : library
-  const fresh = usable.filter((exercise) => !selectedIds.has(exercise.id))
-  const pool = fresh.length > 0 ? fresh : usable
-  const swapSeed = pool.reduce((sum, exercise) => sum + (swaps[exercise.id] ?? 0), 0)
-  const picked = pool[swapSeed % pool.length]
-  selectedIds.add(picked.id)
-
-  return picked
-}
-
-function getDashboardMetrics(
-  plan: TrainingDay[],
-  proteinRange: ReturnType<typeof getProteinRange>,
-  profile: Profile,
-): DashboardMetrics {
-  const exerciseCount = plan.reduce((sum, day) => sum + day.exercises.length, 0)
-  const setRanges = plan.flatMap((day) => day.exercises.map((exercise) => parseSetRange(exercise.sets)))
-  const weeklySetLow = setRanges.reduce((sum, range) => sum + range.low, 0)
-  const weeklySetHigh = setRanges.reduce((sum, range) => sum + range.high, 0)
-  const avgExercises = Number((exerciseCount / Math.max(1, plan.length)).toFixed(1))
-  const loadLabel = weeklySetHigh >= 76 ? 'Hoog' : weeklySetHigh >= 52 ? 'Gebalanceerd' : 'Licht'
-
-  return {
-    trainingDays: profile.days,
-    restDays: 7 - profile.days,
-    exerciseCount,
-    weeklySetLow,
-    weeklySetHigh,
-    avgExercises,
-    proteinMidpoint: Math.round((proteinRange.low + proteinRange.high) / 2),
-    focusCount: new Set(plan.flatMap((day) => day.focus)).size,
-    loadLabel,
-  }
-}
-
-function parseSetRange(value: string) {
-  const numbers = value.match(/\d+/g)?.map(Number) ?? []
-  const low = numbers[0] ?? 0
-  const high = numbers[1] ?? low
-
-  return { low, high }
-}
-
-function getLoadChartData(plan: TrainingDay[]): LoadChartPoint[] {
-  return weeklyLabels.map((label, index) => {
-    const day = plan[index]
-
-    if (!day) {
-      return {
-        label,
-        value: 0,
-        kind: 'rest',
-      }
-    }
-
-    return {
-      label,
-      value: day.exercises.reduce((sum, exercise) => sum + parseSetRange(exercise.sets).high, 0),
-      kind: 'training',
-    }
-  })
-}
-
-function getRiskItems({
-  changeProfile,
-  firstFocus,
-  metrics,
-  profile,
-  selectedMuscle,
-  setSelectedMuscle,
-}: {
-  changeProfile: (profile: Profile) => void
-  firstFocus: Muscle
-  metrics: DashboardMetrics
-  profile: Profile
-  selectedMuscle: Muscle | 'alles'
-  setSelectedMuscle: (muscle: Muscle | 'alles') => void
-}): RiskItem[] {
-  const highLoad = metrics.weeklySetHigh >= 76 || profile.days >= 5
-  const tightRecovery = metrics.restDays <= 2
-  const focused = selectedMuscle !== 'alles'
-
-  return [
-    {
-      id: 'training-load',
-      title: 'Trainingsbelasting',
-      status: highLoad ? 'Hoog' : 'Onder controle',
-      detail: `${metrics.weeklySetLow}-${metrics.weeklySetHigh} werksets over ${metrics.trainingDays} sessies.`,
-      actionLabel: highLoad ? 'Volume verlagen' : 'Alles tonen',
-      tone: highLoad ? 'critical' : 'good',
-      onAction: () =>
-        highLoad
-          ? changeProfile({ ...profile, days: reduceTrainingDays(profile.days) })
-          : setSelectedMuscle('alles'),
-    },
-    {
-      id: 'recovery',
-      title: 'Herstelvenster',
-      status: tightRecovery ? 'Krap' : 'Voldoende',
-      detail: `${metrics.restDays} rustdagen; gemiddeld ${metrics.avgExercises} oefeningen per training.`,
-      actionLabel: tightRecovery ? 'Rustdag toevoegen' : 'Bewaken',
-      tone: tightRecovery ? 'watch' : 'good',
-      onAction: () =>
-        tightRecovery
-          ? changeProfile({ ...profile, days: reduceTrainingDays(profile.days) })
-          : setSelectedMuscle('alles'),
-    },
-    {
-      id: 'technique-focus',
-      title: 'Techniekfocus',
-      status: focused ? 'Gefilterd' : 'Breed',
-      detail: `Actieve focus: ${focused ? muscleLabels[selectedMuscle] : 'alle spiergroepen'}.`,
-      actionLabel: focused ? 'Filter wissen' : `Focus ${muscleLabels[firstFocus]}`,
-      tone: focused ? 'good' : 'watch',
-      onAction: () => setSelectedMuscle(focused ? 'alles' : firstFocus),
-    },
-  ]
-}
-
-function reduceTrainingDays(days: Profile['days']): Profile['days'] {
-  return Math.max(3, days - 1) as Profile['days']
-}
-
-function LocationToggle({
-  location,
-  onChange,
-}: {
-  location: Location
-  onChange: (location: Location) => void
-}) {
+function LocationToggle({ location, onChange }: { location: Location; onChange: (location: Location) => void }) {
   return (
     <div className="location-toggle" aria-label="Trainingslocatie">
-      <button
-        aria-pressed={location === 'gym'}
-        className={location === 'gym' ? 'active' : ''}
-        onClick={() => onChange('gym')}
-        type="button"
-      >
-        Gym
-      </button>
-      <button
-        aria-pressed={location === 'thuis'}
-        className={location === 'thuis' ? 'active' : ''}
-        onClick={() => onChange('thuis')}
-        type="button"
-      >
-        Thuis
-      </button>
+      {(['gym', 'thuis'] as const).map((option) => (
+        <button
+          aria-pressed={location === option}
+          className={location === option ? 'active' : ''}
+          key={option}
+          onClick={() => onChange(option)}
+          type="button"
+        >
+          {option === 'gym' ? 'Gym' : 'Thuis'}
+        </button>
+      ))}
     </div>
   )
 }
 
-function ProfileForm({
-  profile,
-  onChange,
-}: {
-  profile: Profile
-  onChange: (profile: Profile) => void
-}) {
+function ProfileForm({ profile, onChange }: { profile: Profile; onChange: (profile: Profile) => void }) {
   const [weightDraft, setWeightDraft] = useState(() => ({
     input: formatWeightInput(profile.weight),
     message: '',
@@ -1168,15 +337,8 @@ function ProfileForm({
 
   function commitWeight() {
     const result = commitWeightInput(weightInput, profile.weight)
-    setWeightDraft({
-      input: result.input,
-      message: result.message,
-      sourceWeight: result.weight,
-    })
-
-    if (result.weight !== profile.weight) {
-      onChange({ ...profile, weight: result.weight })
-    }
+    setWeightDraft({ input: result.input, message: result.message, sourceWeight: result.weight })
+    if (result.weight !== profile.weight) onChange({ ...profile, weight: result.weight })
   }
 
   return (
@@ -1197,63 +359,59 @@ function ProfileForm({
               aria-invalid={Boolean(weightMessage)}
               inputMode="decimal"
               onBlur={commitWeight}
-              onChange={(event) => {
-                setWeightDraft({
-                  input: event.target.value,
-                  message: '',
-                  sourceWeight: profile.weight,
-                })
-              }}
+              onChange={(event) => setWeightDraft({ input: event.target.value, message: '', sourceWeight: profile.weight })}
               onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  event.currentTarget.blur()
-                }
+                if (event.key === 'Enter') event.currentTarget.blur()
               }}
               type="text"
               value={weightInput}
             />
             <span>kg</span>
           </div>
-          <span
-            className={weightMessage ? 'field-message error' : 'field-message'}
-            id="weight-feedback"
-            role={weightMessage ? 'alert' : undefined}
-          >
+          <span className={weightMessage ? 'field-message error' : 'field-message'} id="weight-feedback" role={weightMessage ? 'alert' : undefined}>
             {weightMessage || '35-180 kg'}
           </span>
         </label>
-        <SelectField
-          label="Doel"
-          onChange={(goal) => onChange({ ...profile, goal })}
-          options={['spiermassa', 'vetverlies', 'onderhoud']}
-          value={profile.goal}
-        />
-        <SelectField
-          label="Trainingsdagen"
-          onChange={(days) => onChange({ ...profile, days })}
-          options={[3, 4, 5, 6]}
-          value={profile.days}
-        />
-        <SelectField
-          label="Niveau"
-          onChange={(level) => onChange({ ...profile, level })}
-          options={['beginner', 'gemiddeld', 'gevorderd']}
-          value={profile.level}
-        />
-        <SelectField
-          label="Dieetvoorkeur"
-          onChange={(diet) => onChange({ ...profile, diet })}
-          options={['normaal', 'vegetarisch', 'lactosevrij']}
-          value={profile.diet}
-        />
-        <SelectField
-          label="Trainingslocatie"
-          onChange={(location) => onChange({ ...profile, location })}
-          options={['gym', 'thuis']}
-          value={profile.location}
-        />
+        <SelectField label="Doel" onChange={(goal) => onChange({ ...profile, goal })} options={['spiermassa', 'vetverlies', 'onderhoud']} value={profile.goal} />
+        <TrainingDaysStepper profile={profile} onChange={onChange} />
+        <SelectField label="Niveau" onChange={(level) => onChange({ ...profile, level })} options={['beginner', 'gemiddeld', 'gevorderd']} value={profile.level} />
+        <SelectField label="Dieetvoorkeur" onChange={(diet) => onChange({ ...profile, diet })} options={['normaal', 'vegetarisch', 'lactosevrij']} value={profile.diet} />
+        <SelectField label="Trainingslocatie" onChange={(location) => onChange({ ...profile, location })} options={['gym', 'thuis']} value={profile.location} />
       </div>
     </section>
+  )
+}
+
+function TrainingDaysStepper({ profile, onChange }: { profile: Profile; onChange: (profile: Profile) => void }) {
+  function setDays(days: TrainingDays) {
+    const currentIsRecommended =
+      profile.selectedWeekdays.join(',') === defaultWeekdaysByDays[profile.days].join(',')
+    onChange({
+      ...profile,
+      days,
+      selectedWeekdays: currentIsRecommended
+        ? defaultWeekdaysByDays[days]
+        : reconcileWeekdays(days, profile.selectedWeekdays),
+    })
+  }
+
+  return (
+    <div className="field-control">
+      <span className="field-label">Trainingsdagen</span>
+      <div className="segmented-control" role="group" aria-label="Trainingsdagen per week">
+        {trainingDayOptions.map((days) => (
+          <button
+            aria-pressed={profile.days === days}
+            className={profile.days === days ? 'active' : ''}
+            key={days}
+            onClick={() => setDays(days)}
+            type="button"
+          >
+            {days}
+          </button>
+        ))}
+      </div>
+    </div>
   )
 }
 
@@ -1282,6 +440,68 @@ function SelectField<T extends string | number>({
   )
 }
 
+function WeekdaySelector({
+  profile,
+  onChange,
+  warnings,
+}: {
+  profile: Profile
+  onChange: (profile: Profile) => void
+  warnings: RecoveryWarning[]
+}) {
+  function toggleWeekday(day: Weekday) {
+    const selected = profile.selectedWeekdays.includes(day)
+      ? profile.selectedWeekdays.filter((item) => item !== day)
+      : [...profile.selectedWeekdays, day]
+
+    if (selected.length > profile.days) {
+      selected.splice(0, selected.length - profile.days)
+    }
+
+    onChange({ ...profile, selectedWeekdays: reconcileWeekdays(profile.days, selected) })
+  }
+
+  return (
+    <div className="weekday-selector">
+      <div className="calendar-strip" role="group" aria-label="Kies weekdagen">
+        {weekdays.map((day) => {
+          const selected = profile.selectedWeekdays.includes(day)
+          const recommended = defaultWeekdaysByDays[profile.days].includes(day)
+          return (
+            <button
+              aria-pressed={selected}
+              className={selected ? 'week-toggle selected' : 'week-toggle'}
+              key={day}
+              onClick={() => toggleWeekday(day)}
+              type="button"
+            >
+              <strong>{weekdayLabels[day]}</strong>
+              <span>{selected ? 'Training' : 'Rust'}</span>
+              {recommended && <small>Aanbevolen</small>}
+            </button>
+          )
+        })}
+      </div>
+      <p className={warnings.length > 0 ? 'weekday-feedback warning' : 'weekday-feedback'}>
+        {warnings[0]?.message ?? 'Dagkeuze past bij herstel: dezelfde zware spiergroepen krijgen rust.'}
+      </p>
+    </div>
+  )
+}
+
+function WeekOverview({ schedule }: { schedule: TrainingDay[] }) {
+  return (
+    <div className="week-overview">
+      {schedule.map((day) => (
+        <div className={day.isRest ? 'week-day rest' : `week-day training intensity-${day.intensity}`} key={day.weekday}>
+          <strong>{weekdayLabels[day.weekday]}</strong>
+          <span>{day.isRest ? 'Herstelmoment' : day.split}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function KpiPanel({
   metrics,
   profile,
@@ -1295,68 +515,59 @@ function KpiPanel({
     <section className="panel kpi-panel">
       <div className="panel-header">
         <div>
-          <p className="eyebrow">KPI's</p>
-          <h2>Weekstatus</h2>
+          <p className="eyebrow">Weekstatus</p>
+          <h2>Herstel en volume</h2>
         </div>
         <span className={`load-badge load-${metrics.loadLabel.toLowerCase()}`}>{metrics.loadLabel}</span>
       </div>
       <div className="kpi-grid">
         <div className="kpi-card primary">
           <span className="kpi-label">Werksets per week</span>
-          <strong>
-            {metrics.weeklySetLow}-{metrics.weeklySetHigh}
-          </strong>
-          <span>{metrics.exerciseCount} oefeningen in totaal</span>
+          <strong>{metrics.weeklySetLow}-{metrics.weeklySetHigh}</strong>
+          <span>{metrics.exerciseCount} oefeningen</span>
         </div>
         <div className="kpi-card">
           <span className="kpi-label">Training/rust</span>
-          <strong>
-            {metrics.trainingDays}/{metrics.restDays}
-          </strong>
-          <span>dagen per week</span>
+          <strong>{metrics.trainingDays}/{metrics.restDays}</strong>
+          <span>max {metrics.maxConsecutiveTrainingDays} achter elkaar</span>
+        </div>
+        <div className="kpi-card">
+          <span className="kpi-label">Herstelkwaliteit</span>
+          <strong>{metrics.recoveryQuality}</strong>
+          <span>{metrics.recoverySummary}</span>
         </div>
         <div className="kpi-card">
           <span className="kpi-label">Proteine</span>
           <strong>{metrics.proteinMidpoint} g</strong>
-          <span>
-            {proteinRange.low}-{proteinRange.high} g/dag
-          </span>
-        </div>
-        <div className="kpi-card">
-          <span className="kpi-label">Focusspieren</span>
-          <strong>{metrics.focusCount}</strong>
-          <span>
-            {goalLabel(profile.goal)}, {profile.level}
-          </span>
+          <span>{proteinRange.low}-{proteinRange.high} g/dag, {goalLabel(profile.goal)}</span>
         </div>
       </div>
     </section>
   )
 }
 
-function RiskOverview({ items }: { items: RiskItem[] }) {
+function WarningPanel({ title, warnings }: { title: string; warnings: RecoveryWarning[] }) {
+  const items = warnings.length > 0 ? warnings : [{ id: 'ok', tone: 'good' as const, message: 'Geen herstel- of volumewaarschuwingen.' }]
+
   return (
     <section className="panel risk-panel">
       <div className="panel-header">
         <div>
-          <p className="eyebrow">Risico</p>
-          <h2>Actielijst</h2>
+          <p className="eyebrow">Checks</p>
+          <h2>{title}</h2>
         </div>
-        <span className="panel-badge">{items.filter((item) => item.tone !== 'good').length} open</span>
+        <span className="panel-badge">{warnings.length} waarschuwingen</span>
       </div>
       <div className="risk-list">
         {items.map((item) => (
           <article className={`risk-item risk-${item.tone}`} key={item.id}>
             <div>
               <div className="risk-title-row">
-                <h3>{item.title}</h3>
-                <span>{item.status}</span>
+                <h3>{item.tone === 'critical' ? 'Risicovol' : item.tone === 'watch' ? 'Let op' : 'Goed'}</h3>
+                <span>{item.tone}</span>
               </div>
-              <p>{item.detail}</p>
+              <p>{item.message}</p>
             </div>
-            <button onClick={item.onAction} type="button">
-              {item.actionLabel}
-            </button>
           </article>
         ))}
       </div>
@@ -1373,12 +584,6 @@ function OperationsCharts({
   metrics: DashboardMetrics
   proteinRange: ReturnType<typeof getProteinRange>
 }) {
-  const loadConclusion =
-    metrics.restDays <= 2
-      ? `Conclusie: ${metrics.loadLabel.toLowerCase()} volume met weinig rust; verlaag volume zodra prestaties dalen.`
-      : `Conclusie: ${metrics.loadLabel.toLowerCase()} volume met voldoende herstelruimte voor progressie.`
-  const proteinConclusion = `Conclusie: mik op ${proteinRange.perMeal} g per maaltijd om het dagdoel stabiel te halen.`
-
   return (
     <section className="section-block chart-section">
       <div className="section-heading">
@@ -1386,53 +591,30 @@ function OperationsCharts({
           <p className="eyebrow">Grafieken</p>
           <h2>Belasting en voeding</h2>
         </div>
-        <p className="section-copy">
-          Weekcontrole op volume, rust en proteinedekking.
-        </p>
+        <p className="section-copy">Werksets volgen de gekozen weekdagen; rustdagen blijven zichtbaar.</p>
       </div>
       <div className="chart-grid">
         <article className="chart-card">
           <div className="chart-header">
             <div>
               <h3>Werksets per dag</h3>
-              <p>
-                Weektotaal {metrics.weeklySetLow}-{metrics.weeklySetHigh} sets
-              </p>
+              <p>Weektotaal {metrics.weeklySetLow}-{metrics.weeklySetHigh} sets</p>
             </div>
             <span className="chart-unit">sets</span>
           </div>
           <LoadBarChart data={data} />
-          <div className="chart-legend">
-            <span>
-              <i className="legend-swatch training"></i>Training
-            </span>
-            <span>
-              <i className="legend-swatch rest"></i>Rust
-            </span>
-          </div>
-          <p className="chart-conclusion">{loadConclusion}</p>
+          <p className="chart-conclusion">Conclusie: herstelkwaliteit is {metrics.recoveryQuality}.</p>
         </article>
-
         <article className="chart-card">
           <div className="chart-header">
             <div>
               <h3>Proteinedoel</h3>
-              <p>
-                Dagbereik {proteinRange.low}-{proteinRange.high} g
-              </p>
+              <p>Dagbereik {proteinRange.low}-{proteinRange.high} g</p>
             </div>
             <span className="chart-unit">g/dag</span>
           </div>
           <ProteinRangeChart metrics={metrics} proteinRange={proteinRange} />
-          <div className="chart-legend">
-            <span>
-              <i className="legend-swatch target"></i>Doelbereik
-            </span>
-            <span>
-              <i className="legend-swatch midpoint"></i>Dagfocus
-            </span>
-          </div>
-          <p className="chart-conclusion">{proteinConclusion}</p>
+          <p className="chart-conclusion">Mik op ongeveer {proteinRange.perMeal} g per maaltijd bij 4 maaltijden.</p>
         </article>
       </div>
     </section>
@@ -1445,40 +627,19 @@ function LoadBarChart({ data }: { data: LoadChartPoint[] }) {
   return (
     <svg className="bar-chart" viewBox="0 0 360 190" role="img" aria-labelledby="load-chart-title">
       <title id="load-chart-title">Werksets per dag</title>
-      <text className="axis-label" x="16" y="22">
-        sets
-      </text>
       <line className="chart-gridline" x1="42" x2="336" y1="142" y2="142" />
       <line className="chart-gridline" x1="42" x2="336" y1="92" y2="92" />
       <line className="chart-gridline" x1="42" x2="336" y1="42" y2="42" />
-      <text className="axis-tick" x="18" y="146">
-        0
-      </text>
-      <text className="axis-tick" x="12" y="46">
-        {maxValue}
-      </text>
       {data.map((point, index) => {
         const x = 54 + index * 41
-        const barHeight =
-          point.kind === 'rest' ? 8 : Math.max(8, Math.round((point.value / maxValue) * 100))
+        const barHeight = point.kind === 'rest' ? 8 : Math.max(8, Math.round((point.value / maxValue) * 100))
         const y = 142 - barHeight
 
         return (
           <g key={point.label}>
-            <rect
-              className={point.kind === 'training' ? 'chart-bar training' : 'chart-bar rest'}
-              height={barHeight}
-              rx="4"
-              width="24"
-              x={x}
-              y={y}
-            />
-            <text className="bar-value" x={x + 12} y={y - 7}>
-              {point.kind === 'training' ? point.value : 'R'}
-            </text>
-            <text className="axis-tick" x={x + 12} y="170">
-              {point.label}
-            </text>
+            <rect className={point.kind === 'training' ? 'chart-bar training' : 'chart-bar rest'} height={barHeight} rx="4" width="24" x={x} y={y} />
+            <text className="bar-value" x={x + 12} y={y - 7}>{point.kind === 'training' ? point.value : 'R'}</text>
+            <text className="axis-tick" x={x + 12} y="170">{point.label}</text>
           </g>
         )
       })}
@@ -1503,67 +664,38 @@ function ProteinRangeChart({
   return (
     <svg className="range-chart" viewBox="0 0 360 190" role="img" aria-labelledby="protein-chart-title">
       <title id="protein-chart-title">Proteinedoel per dag</title>
-      <text className="axis-label" x="16" y="34">
-        gram
-      </text>
       <line className="range-track" x1={chartStart} x2={chartStart + chartWidth} y1="94" y2="94" />
       <rect className="range-target" height="18" rx="9" width={highX - lowX} x={lowX} y="85" />
       <line className="range-midpoint" x1={midpointX} x2={midpointX} y1="70" y2="116" />
       <circle className="range-dot" cx={midpointX} cy="94" r="7" />
-      <text className="axis-tick" x={chartStart} y="132">
-        0g
-      </text>
-      <text className="axis-tick" x={chartStart + chartWidth} y="132">
-        {scaleMax}g
-      </text>
-      <text className="range-label" x={lowX} y="72">
-        {proteinRange.low}g
-      </text>
-      <text className="range-label" x={highX} y="72">
-        {proteinRange.high}g
-      </text>
-      <text className="range-label midpoint" x={midpointX} y="52">
-        {metrics.proteinMidpoint}g focus
-      </text>
-      <text className="range-meal-label" x="180" y="164">
-        {proteinRange.perMeal} g per maaltijd bij 4 maaltijden
-      </text>
+      <text className="range-label" x={lowX} y="72">{proteinRange.low}g</text>
+      <text className="range-label" x={highX} y="72">{proteinRange.high}g</text>
+      <text className="range-label midpoint" x={midpointX} y="52">{metrics.proteinMidpoint}g focus</text>
+      <text className="range-meal-label" x="180" y="164">{proteinRange.perMeal} g per maaltijd</text>
     </svg>
   )
 }
 
-function MuscleFilter({
-  muscles,
+function TechniqueFocusFilter({
   value,
   onChange,
 }: {
-  muscles: Muscle[]
-  value: Muscle | 'alles'
-  onChange: (value: Muscle | 'alles') => void
+  value: TechniqueFocus
+  onChange: (value: TechniqueFocus) => void
 }) {
   return (
     <div className="filter-panel">
-      <span className="filter-status">
-        Actief: {value === 'alles' ? 'alle spiergroepen' : muscleLabels[value]}
-      </span>
-      <div className="filter-bar" role="group" aria-label="Filter op spiergroep">
-        <button
-          aria-pressed={value === 'alles'}
-          className={value === 'alles' ? 'active' : ''}
-          onClick={() => onChange('alles')}
-          type="button"
-        >
-          Alles
-        </button>
-        {muscles.map((muscle) => (
+      <span className="filter-status">Actief: {focusLabels[value]}</span>
+      <div className="filter-bar" role="group" aria-label="Techniekfocus">
+        {focusOptions.map((focus) => (
           <button
-            aria-pressed={value === muscle}
-            className={value === muscle ? 'active' : ''}
-            key={muscle}
-            onClick={() => onChange(muscle)}
+            aria-pressed={value === focus}
+            className={value === focus ? 'active' : ''}
+            key={focus}
+            onClick={() => onChange(focus)}
             type="button"
           >
-            {muscleLabels[muscle]}
+            {focusLabels[focus]}
           </button>
         ))}
       </div>
@@ -1571,41 +703,25 @@ function MuscleFilter({
   )
 }
 
-function WeekOverview({ days }: { days: Profile['days'] }) {
-  return (
-    <div className="week-overview">
-      {weeklyLabels.map((label, index) => {
-        const trainingDay = index < days
-        return (
-          <div className={trainingDay ? 'week-day training' : 'week-day rest'} key={label}>
-            <strong>{label}</strong>
-            <span>{trainingDay ? `Training ${index + 1}` : 'Rust'}</span>
-          </div>
-        )
-      })}
-    </div>
-  )
-}
-
 function TrainingDayCard({
   day,
-  dayIndex,
-  location,
+  focus,
+  number,
   onSwap,
 }: {
   day: TrainingDay
-  dayIndex: number
-  location: Location
-  onSwap: (exercise: Exercise) => void
+  focus: TechniqueFocus
+  number: number
+  onSwap: (exercise: PlannedExercise) => void
 }) {
   return (
-    <article className="training-card">
+    <article className={`training-card intensity-${day.intensity}`}>
       <div className="training-header">
         <div>
-          <p className="eyebrow">{location === 'gym' ? 'Gym-versie' : 'Thuis-versie'}</p>
-          <h3>{day.title}</h3>
+          <p className="eyebrow">{weekdayLabels[day.weekday]} - {day.intensity}</p>
+          <h3>{day.split}</h3>
         </div>
-        <div className="day-index">{dayIndex + 1}</div>
+        <div className="day-index">{number}</div>
       </div>
       <div className="muscle-tags">
         {day.focus.map((muscle) => (
@@ -1613,15 +729,11 @@ function TrainingDayCard({
         ))}
       </div>
       {day.exercises.length === 0 ? (
-        <p className="empty-state">Geen oefeningen binnen dit filter. Kies een andere spiergroep.</p>
+        <p className="empty-state">Geen oefeningen binnen techniekfocus {focusLabels[focus]}.</p>
       ) : (
         <div className="exercise-stack">
-          {day.exercises.map((exercise, exerciseIndex) => (
-            <ExerciseCard
-              exercise={exercise}
-              key={`${exercise.id}-${exerciseIndex}`}
-              onSwap={() => onSwap(exercise)}
-            />
+          {day.exercises.map((exercise, index) => (
+            <ExerciseCard exercise={exercise} focus={focus} key={`${exercise.id}-${index}`} onSwap={() => onSwap(exercise)} />
           ))}
         </div>
       )}
@@ -1629,73 +741,76 @@ function TrainingDayCard({
   )
 }
 
-function ExerciseCard({ exercise, onSwap }: { exercise: Exercise; onSwap: () => void }) {
+function ExerciseCard({
+  exercise,
+  focus,
+  onSwap,
+}: {
+  exercise: PlannedExercise
+  focus: TechniqueFocus
+  onSwap: () => void
+}) {
   return (
     <details className="exercise-card">
       <summary>
         <div className="exercise-summary">
-          <MuscleMap
-            compact
-            focus={exercise.secondary}
-            primary={exercise.primary}
-            title={exercise.name}
-          />
+          <MuscleMap compact exercise={exercise} title={exercise.name} />
           <div>
             <h4>{exercise.name}</h4>
-            <p>{exercise.purpose}</p>
+            <p>{exercise.technique.goal}</p>
             <div className="exercise-meta">
-              <span>{exercise.sets} sets</span>
-              <span>{exercise.reps} reps</span>
-              <span>{exercise.rest} rust</span>
-              <span>{exercise.equipment}</span>
+              <span>{exercise.plannedSets} sets</span>
+              <span>{exercise.plannedReps} reps</span>
+              <span>{exercise.plannedRest} rust</span>
+              <span>{exercise.equipment.join(', ')}</span>
             </div>
           </div>
         </div>
       </summary>
       <div className="exercise-detail">
         <div className="target-line">
-          <strong>Primair: {muscleLabels[exercise.primary]}</strong>
-          <span>Secundair: {exercise.secondary.map((muscle) => muscleLabels[muscle]).join(', ')}</span>
+          <strong>Primair: {exercise.primaryMuscles.map(labelMuscle).join(', ')}</strong>
+          <span>Secundair: {exercise.secondaryMuscles.map(labelMuscle).join(', ')}</span>
         </div>
-        <TechniqueBlock exercise={exercise} />
+        <TechniqueBlock exercise={exercise} focus={focus} />
         <div className="alternative-row">
-          <span>{exercise.alternative}</span>
-          <button onClick={onSwap} type="button">
-            Andere oefening
-          </button>
+          <span>Drukke gym: {exercise.alternatives.busyGym} Thuisvariant: {exercise.alternatives.home}</span>
+          <button onClick={onSwap} type="button">Andere oefening</button>
         </div>
       </div>
     </details>
   )
 }
 
-function TechniqueBlock({ exercise }: { exercise: Exercise }) {
+function TechniqueBlock({ exercise, focus }: { exercise: PlannedExercise; focus: TechniqueFocus }) {
   return (
     <div className="technique-grid">
+      <InfoBlock highlighted={focus !== 'alles'} title="Doel van de oefening" value={exercise.technique.goal} />
+      <InfoBlock title="Sets/reps/rust" value={`${exercise.plannedSets} sets, ${exercise.plannedReps} reps, ${exercise.plannedRest} rust.`} />
       <InfoBlock title="Startpositie" value={exercise.technique.start} />
       <InfoBlock title="Houding" value={exercise.technique.posture} />
-      <InfoBlock title="Range of motion" value={exercise.technique.range} />
-      <InfoBlock title="Ademhaling" value={exercise.technique.breathing} />
-      <ListBlock title="Stap voor stap" values={exercise.technique.steps} />
+      <ListBlock title="Uitvoering stap voor stap" values={exercise.technique.steps} />
+      <InfoBlock highlighted={focus === 'ademhaling / bracing'} title="Ademhaling/bracing" value={exercise.technique.breathing} />
+      <InfoBlock highlighted={focus === 'range of motion'} title="Range of motion" value={exercise.technique.range} />
       <ListBlock title="Veelgemaakte fouten" values={exercise.technique.mistakes} />
-      <ListBlock title="Spier beter targeten" values={exercise.technique.targetTips} />
-      <ListBlock title="Blessures voorkomen" values={exercise.technique.injuryTips} />
+      <ListBlock highlighted={focus === 'blessurepreventie'} title="Veiligheidsadvies" values={exercise.technique.injuryTips} />
+      <InfoBlock title="Niveau-aanpassing" value={exercise.technique.levelAdjustments.beginner + ' ' + exercise.technique.levelAdjustments.gemiddeld + ' ' + exercise.technique.levelAdjustments.gevorderd} />
     </div>
   )
 }
 
-function InfoBlock({ title, value }: { title: string; value: string }) {
+function InfoBlock({ title, value, highlighted = false }: { title: string; value: string; highlighted?: boolean }) {
   return (
-    <div className="info-block">
+    <div className={highlighted ? 'info-block highlighted' : 'info-block'}>
       <strong>{title}</strong>
       <p>{value}</p>
     </div>
   )
 }
 
-function ListBlock({ title, values }: { title: string; values: string[] }) {
+function ListBlock({ title, values, highlighted = false }: { title: string; values: string[]; highlighted?: boolean }) {
   return (
-    <div className="info-block">
+    <div className={highlighted ? 'info-block highlighted' : 'info-block'}>
       <strong>{title}</strong>
       <ul>
         {values.map((value) => (
@@ -1706,22 +821,12 @@ function ListBlock({ title, values }: { title: string; values: string[] }) {
   )
 }
 
-function MuscleMap({
-  primary,
-  focus,
-  title,
-  compact = false,
-}: {
-  primary: Muscle
-  focus: Muscle[]
-  title: string
-  compact?: boolean
-}) {
-  const highlighted = new Set<Muscle>([primary, ...focus])
+function MuscleMap({ exercise, title, compact = false }: { exercise: PlannedExercise; title: string; compact?: boolean }) {
+  const primary = exercise.primaryMuscles[0] ?? 'core'
+  const highlighted = new Set<Muscle>([...exercise.primaryMuscles, ...exercise.secondaryMuscles])
 
   return (
     <div className={compact ? 'muscle-map compact' : 'muscle-map'} aria-label={`Spiervisual voor ${title}`}>
-      {!compact && <strong>{title}</strong>}
       <svg viewBox="0 0 120 220" role="img">
         <title>{title}</title>
         <circle className="body-base" cx="60" cy="22" r="14" />
@@ -1737,26 +842,23 @@ function MuscleMap({
         <rect className={partClass('kuiten', primary, highlighted)} x="38" y="202" width="16" height="16" rx="7" />
         <rect className={partClass('kuiten', primary, highlighted)} x="66" y="202" width="16" height="16" rx="7" />
       </svg>
-      {!compact && (
-        <div className="map-legend">
-          <span className="primary-dot"></span> primair
-          <span className="secondary-dot"></span> secundair
-        </div>
-      )}
     </div>
   )
 }
 
-function partClass(muscle: Muscle, primary: Muscle, highlighted: Set<Muscle>) {
-  if (muscle === primary) {
-    return 'body-part primary'
-  }
+function VolumeGrid({ totals }: { totals: DashboardMetrics['muscleSetTotals'] }) {
+  const entries = Object.entries(totals).filter(([muscle]) => muscle !== 'full body')
 
-  if (highlighted.has(muscle) || primary === 'benen') {
-    return 'body-part secondary'
-  }
-
-  return 'body-part'
+  return (
+    <div className="volume-grid">
+      {entries.map(([muscle, sets]) => (
+        <div className="volume-item" key={muscle}>
+          <strong>{labelMuscle(muscle as Muscle)}</strong>
+          <span>{sets} sets</span>
+        </div>
+      ))}
+    </div>
+  )
 }
 
 function RecipeCard({ recipe }: { recipe: Recipe }) {
@@ -1781,14 +883,31 @@ function RecipeCard({ recipe }: { recipe: Recipe }) {
   )
 }
 
-function dietLabel(diet: Diet) {
-  const labels: Record<Diet, string> = {
-    normaal: 'normaal',
-    vegetarisch: 'vegetarisch',
-    lactosevrij: 'lactosevrij',
+function partClass(muscle: Muscle, primary: Muscle, highlighted: Set<Muscle>) {
+  if (muscle === primary) return 'body-part primary'
+  if (highlighted.has(muscle) || (primary === 'benen' && ['quadriceps', 'hamstrings', 'billen', 'kuiten'].includes(muscle))) return 'body-part secondary'
+  return 'body-part'
+}
+
+function splitSummary(days: TrainingDays) {
+  const labels: Record<TrainingDays, string> = {
+    1: 'Full body compact',
+    2: 'Full body A/B',
+    3: 'Full body met spreiding',
+    4: 'Upper/lower split',
+    5: 'Push/pull/legs met techniekdag',
+    6: 'Push/pull/legs x2',
   }
 
-  return labels[diet]
+  return labels[days]
+}
+
+function labelMuscle(muscle: Muscle) {
+  return muscleLabels[muscle]
+}
+
+function dietLabel(diet: Diet) {
+  return diet
 }
 
 function goalLabel(goal: Goal) {

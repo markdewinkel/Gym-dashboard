@@ -46,6 +46,7 @@
 .status-strip,
 .location-toggle,
 .filter-bar,
+.segmented-control,
 .muscle-tags,
 .exercise-meta,
 .recipe-metrics,
@@ -201,6 +202,34 @@ label {
   font-size: 0.82rem;
   font-weight: 800;
   text-align: left;
+}
+
+.field-control {
+  display: grid;
+  gap: 6px;
+  color: var(--text-h);
+  font-size: 0.82rem;
+  font-weight: 800;
+  text-align: left;
+}
+
+.field-label {
+  color: var(--text-h);
+}
+
+.segmented-control {
+  min-height: 38px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.segmented-control button {
+  min-width: 34px;
+  min-height: 30px;
+  padding: 5px 9px;
+  flex: 1 1 0;
 }
 
 select,
@@ -535,6 +564,59 @@ input:hover {
   margin-bottom: 14px;
 }
 
+.weekday-selector {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.calendar-strip {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.week-toggle {
+  display: grid;
+  min-height: 74px;
+  align-content: center;
+  gap: 2px;
+  padding: 8px;
+  text-align: center;
+}
+
+.week-toggle span,
+.week-toggle small {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.week-toggle.selected {
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
+}
+
+.week-toggle.selected strong {
+  color: var(--accent-strong);
+}
+
+.weekday-feedback {
+  padding: 10px 12px;
+  border: 1px solid var(--accent-border);
+  border-radius: 8px;
+  color: var(--accent-strong);
+  background: var(--accent-bg);
+  font-size: 0.86rem;
+  font-weight: 800;
+}
+
+.weekday-feedback.warning {
+  border-color: var(--warning);
+  color: var(--warning);
+  background: var(--warning-bg);
+}
+
 .week-day {
   display: grid;
   gap: 2px;
@@ -556,6 +638,17 @@ input:hover {
   background: var(--surface-strong);
 }
 
+.week-day.intensity-zwaar {
+  border-color: var(--warning);
+  background: var(--warning-bg);
+}
+
+.week-day.intensity-techniek,
+.week-day.intensity-licht {
+  border-color: var(--info);
+  background: var(--info-bg);
+}
+
 .week-day span {
   color: var(--muted);
   font-size: 0.76rem;
@@ -570,6 +663,15 @@ input:hover {
 
 .training-card {
   padding: 14px;
+}
+
+.training-card.intensity-zwaar {
+  border-color: rgba(231, 180, 92, 0.45);
+}
+
+.training-card.intensity-techniek,
+.training-card.intensity-licht {
+  border-color: rgba(124, 183, 240, 0.45);
 }
 
 .training-header h3,
@@ -663,6 +765,11 @@ input:hover {
   border-radius: 8px;
   background: var(--surface);
   text-align: left;
+}
+
+.info-block.highlighted {
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
 }
 
 .info-block strong {
@@ -776,6 +883,33 @@ input:hover {
   text-align: left;
 }
 
+.volume-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.volume-item {
+  display: grid;
+  gap: 4px;
+  min-height: 68px;
+  align-content: center;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.volume-item strong {
+  color: var(--text-h);
+}
+
+.volume-item span {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
 .recipe-card p {
   color: var(--muted);
   font-size: 0.88rem;
@@ -849,7 +983,8 @@ input:hover {
   .kpi-grid,
   .technique-grid,
   .anatomy-grid,
-  .recipe-grid {
+  .recipe-grid,
+  .volume-grid {
     grid-template-columns: 1fr;
   }
 
@@ -864,6 +999,10 @@ input:hover {
   }
 
   .week-overview {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .calendar-strip {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
