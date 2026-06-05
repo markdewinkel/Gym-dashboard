@@ -1,5 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import './App.css'
+import {
+  commitWeightInput,
+  formatWeightInput,
+  getProteinRange,
+  normalizeSelectedMuscle,
+  normalizeStoredWeight,
+  parseSelectValue,
+} from './dashboardLogic'
 
 type Goal = 'spiermassa' | 'vetverlies' | 'onderhoud'
 type Level = 'beginner' | 'gemiddeld' | 'gevorderd'
@@ -66,6 +74,36 @@ type Recipe = {
   protein: number
   calories: number
   labels: Diet[]
+}
+
+type DashboardMetrics = {
+  trainingDays: number
+  restDays: number
+  exerciseCount: number
+  weeklySetLow: number
+  weeklySetHigh: number
+  avgExercises: number
+  proteinMidpoint: number
+  focusCount: number
+  loadLabel: string
+}
+
+type RiskTone = 'good' | 'watch' | 'critical'
+
+type RiskItem = {
+  id: string
+  title: string
+  status: string
+  detail: string
+  actionLabel: string
+  tone: RiskTone
+  onAction: () => void
+}
+
+type LoadChartPoint = {
+  label: string
+  value: number
+  kind: 'training' | 'rest'
 }
 
 const STORAGE_KEY = 'personal-gym-dashboard-profile'
@@ -739,48 +777,77 @@ function App() {
 
   const plan = useMemo(() => buildPlan(profile, swaps), [profile, swaps])
   const proteinRange = useMemo(() => getProteinRange(profile.weight), [profile.weight])
+  const dashboardMetrics = useMemo(
+    () => getDashboardMetrics(plan, proteinRange, profile),
+    [plan, profile, proteinRange],
+  )
+  const loadChartData = useMemo(() => getLoadChartData(plan), [plan])
   const matchingRecipes = useMemo(
     () => recipes.filter((recipe) => recipe.labels.includes(profile.diet)).slice(0, 4),
     [profile.diet],
   )
+  const activeMuscles = useMemo(() => getActiveMuscles(plan), [plan])
+  const selectedMuscleForView = normalizeSelectedMuscle(selectedMuscle, activeMuscles)
   const visiblePlan = useMemo(
     () =>
       plan.map((day) => ({
         ...day,
         exercises:
-          selectedMuscle === 'alles'
+          selectedMuscleForView === 'alles'
             ? day.exercises
             : day.exercises.filter(
                 (exercise) =>
-                  exercise.primary === selectedMuscle || exercise.secondary.includes(selectedMuscle),
+                  exercise.primary === selectedMuscleForView ||
+                  exercise.secondary.includes(selectedMuscleForView),
               ),
       })),
-    [plan, selectedMuscle],
+    [plan, selectedMuscleForView],
   )
 
-  const activeMuscles = Array.from(new Set(plan.flatMap((day) => day.focus)))
+  const firstFocus = activeMuscles[0] ?? 'core'
+  const changeProfile = (nextProfile: Profile) => {
+    const nextActiveMuscles = getActiveMuscles(buildPlan(nextProfile, swaps))
+    setSelectedMuscle((current) => normalizeSelectedMuscle(current, nextActiveMuscles))
+    setProfile(nextProfile)
+  }
+  const riskItems = getRiskItems({
+    changeProfile,
+    firstFocus,
+    metrics: dashboardMetrics,
+    profile,
+    selectedMuscle: selectedMuscleForView,
+    setSelectedMuscle,
+  })
 
   return (
     <main className="app-shell">
       <header className="topbar">
-        <div>
-          <p className="eyebrow">Persoonlijk fitnessdashboard</p>
-          <h1>Train slimmer, herstel beter.</h1>
-          <p className="intro">
-            Een lokaal opgeslagen weekschema met techniekfocus, spiergroepvisuals, proteinedoel en
-            simpele recepten voor jouw doel.
-          </p>
+        <div className="topbar-title">
+          <p className="eyebrow">Operationele werkruimte</p>
+          <h1>Training operations</h1>
         </div>
-        <LocationToggle
-          location={profile.location}
-          onChange={(location) => setProfile((current) => ({ ...current, location }))}
-        />
+        <div className="topbar-controls">
+          <div className="status-strip" aria-label="Actieve profielstatus">
+            <span>{goalLabel(profile.goal)}</span>
+            <span>{profile.days} trainingsdagen</span>
+            <span>{dashboardMetrics.restDays} rustdagen</span>
+          </div>
+          <LocationToggle
+            location={profile.location}
+            onChange={(location) => changeProfile({ ...profile, location })}
+          />
+        </div>
       </header>
 
-      <section className="dashboard-grid">
-        <ProfileForm profile={profile} onChange={setProfile} />
-        <ProteinCard range={proteinRange} weight={profile.weight} goal={profile.goal} />
+      <section className="operations-grid">
+        <ProfileForm profile={profile} onChange={changeProfile} />
+        <div className="operations-stack">
+          <KpiPanel metrics={dashboardMetrics} proteinRange={proteinRange} profile={profile} />
+          <RiskOverview items={riskItems} />
+        </div>
       </section>
+
+      <OperationsCharts data={loadChartData} metrics={dashboardMetrics} proteinRange={proteinRange} />
 
       <section className="section-block">
         <div className="section-heading">
@@ -788,7 +855,7 @@ function App() {
             <p className="eyebrow">Weekplanning</p>
             <h2>{profile.days} trainingsdagen per week</h2>
           </div>
-          <MuscleFilter muscles={activeMuscles} value={selectedMuscle} onChange={setSelectedMuscle} />
+          <MuscleFilter muscles={activeMuscles} value={selectedMuscleForView} onChange={setSelectedMuscle} />
         </div>
         <WeekOverview days={profile.days} />
         <div className="training-list">
@@ -867,7 +934,7 @@ function loadProfile(): Profile {
 
     const parsed = JSON.parse(stored) as Partial<Profile>
     return {
-      weight: typeof parsed.weight === 'number' && parsed.weight > 0 ? parsed.weight : defaultProfile.weight,
+      weight: normalizeStoredWeight(parsed.weight, defaultProfile.weight),
       goal: isOneOf(parsed.goal, ['spiermassa', 'vetverlies', 'onderhoud'])
         ? parsed.goal
         : defaultProfile.goal,
@@ -907,6 +974,16 @@ function buildPlan(profile: Profile, swaps: Record<string, number>): TrainingDay
   })
 }
 
+function getActiveMuscles(plan: TrainingDay[]) {
+  return Array.from(
+    new Set(
+      plan.flatMap((day) =>
+        day.exercises.flatMap((exercise) => [exercise.primary, ...exercise.secondary]),
+      ),
+    ),
+  )
+}
+
 function pickExercise(
   library: Exercise[],
   muscle: Muscle,
@@ -931,14 +1008,117 @@ function pickExercise(
   return picked
 }
 
-function getProteinRange(weight: number) {
-  const low = Math.round(weight * 1.6)
-  const high = Math.round(weight * 2)
+function getDashboardMetrics(
+  plan: TrainingDay[],
+  proteinRange: ReturnType<typeof getProteinRange>,
+  profile: Profile,
+): DashboardMetrics {
+  const exerciseCount = plan.reduce((sum, day) => sum + day.exercises.length, 0)
+  const setRanges = plan.flatMap((day) => day.exercises.map((exercise) => parseSetRange(exercise.sets)))
+  const weeklySetLow = setRanges.reduce((sum, range) => sum + range.low, 0)
+  const weeklySetHigh = setRanges.reduce((sum, range) => sum + range.high, 0)
+  const avgExercises = Number((exerciseCount / Math.max(1, plan.length)).toFixed(1))
+  const loadLabel = weeklySetHigh >= 76 ? 'Hoog' : weeklySetHigh >= 52 ? 'Gebalanceerd' : 'Licht'
+
   return {
-    low,
-    high,
-    perMeal: Math.round(((low + high) / 2) / 4),
+    trainingDays: profile.days,
+    restDays: 7 - profile.days,
+    exerciseCount,
+    weeklySetLow,
+    weeklySetHigh,
+    avgExercises,
+    proteinMidpoint: Math.round((proteinRange.low + proteinRange.high) / 2),
+    focusCount: new Set(plan.flatMap((day) => day.focus)).size,
+    loadLabel,
   }
+}
+
+function parseSetRange(value: string) {
+  const numbers = value.match(/\d+/g)?.map(Number) ?? []
+  const low = numbers[0] ?? 0
+  const high = numbers[1] ?? low
+
+  return { low, high }
+}
+
+function getLoadChartData(plan: TrainingDay[]): LoadChartPoint[] {
+  return weeklyLabels.map((label, index) => {
+    const day = plan[index]
+
+    if (!day) {
+      return {
+        label,
+        value: 0,
+        kind: 'rest',
+      }
+    }
+
+    return {
+      label,
+      value: day.exercises.reduce((sum, exercise) => sum + parseSetRange(exercise.sets).high, 0),
+      kind: 'training',
+    }
+  })
+}
+
+function getRiskItems({
+  changeProfile,
+  firstFocus,
+  metrics,
+  profile,
+  selectedMuscle,
+  setSelectedMuscle,
+}: {
+  changeProfile: (profile: Profile) => void
+  firstFocus: Muscle
+  metrics: DashboardMetrics
+  profile: Profile
+  selectedMuscle: Muscle | 'alles'
+  setSelectedMuscle: (muscle: Muscle | 'alles') => void
+}): RiskItem[] {
+  const highLoad = metrics.weeklySetHigh >= 76 || profile.days >= 5
+  const tightRecovery = metrics.restDays <= 2
+  const focused = selectedMuscle !== 'alles'
+
+  return [
+    {
+      id: 'training-load',
+      title: 'Trainingsbelasting',
+      status: highLoad ? 'Hoog' : 'Onder controle',
+      detail: `${metrics.weeklySetLow}-${metrics.weeklySetHigh} werksets over ${metrics.trainingDays} sessies.`,
+      actionLabel: highLoad ? 'Volume verlagen' : 'Alles tonen',
+      tone: highLoad ? 'critical' : 'good',
+      onAction: () =>
+        highLoad
+          ? changeProfile({ ...profile, days: reduceTrainingDays(profile.days) })
+          : setSelectedMuscle('alles'),
+    },
+    {
+      id: 'recovery',
+      title: 'Herstelvenster',
+      status: tightRecovery ? 'Krap' : 'Voldoende',
+      detail: `${metrics.restDays} rustdagen; gemiddeld ${metrics.avgExercises} oefeningen per training.`,
+      actionLabel: tightRecovery ? 'Rustdag toevoegen' : 'Bewaken',
+      tone: tightRecovery ? 'watch' : 'good',
+      onAction: () =>
+        tightRecovery
+          ? changeProfile({ ...profile, days: reduceTrainingDays(profile.days) })
+          : setSelectedMuscle('alles'),
+    },
+    {
+      id: 'technique-focus',
+      title: 'Techniekfocus',
+      status: focused ? 'Gefilterd' : 'Breed',
+      detail: `Actieve focus: ${focused ? muscleLabels[selectedMuscle] : 'alle spiergroepen'}.`,
+      actionLabel: focused ? 'Filter wissen' : `Focus ${muscleLabels[firstFocus]}`,
+      tone: focused ? 'good' : 'watch',
+      onAction: () => setSelectedMuscle(focused ? 'alles' : firstFocus),
+    },
+  ]
+}
+
+function reduceTrainingDays(days: Profile['days']): Profile['days'] {
+  return Math.max(3, days - 1) as Profile['days']
 }
 
 function LocationToggle({
@@ -950,10 +1130,20 @@ function LocationToggle({
 }) {
   return (
     <div className="location-toggle" aria-label="Trainingslocatie">
-      <button className={location === 'gym' ? 'active' : ''} onClick={() => onChange('gym')} type="button">
+      <button
+        aria-pressed={location === 'gym'}
+        className={location === 'gym' ? 'active' : ''}
+        onClick={() => onChange('gym')}
+        type="button"
+      >
         Gym
       </button>
-      <button className={location === 'thuis' ? 'active' : ''} onClick={() => onChange('thuis')} type="button">
+      <button
+        aria-pressed={location === 'thuis'}
+        className={location === 'thuis' ? 'active' : ''}
+        onClick={() => onChange('thuis')}
+        type="button"
+      >
         Thuis
       </button>
     </div>
@@ -967,27 +1157,70 @@ function ProfileForm({
   profile: Profile
   onChange: (profile: Profile) => void
 }) {
+  const [weightDraft, setWeightDraft] = useState(() => ({
+    input: formatWeightInput(profile.weight),
+    message: '',
+    sourceWeight: profile.weight,
+  }))
+  const draftMatchesProfile = weightDraft.sourceWeight === profile.weight
+  const weightInput = draftMatchesProfile ? weightDraft.input : formatWeightInput(profile.weight)
+  const weightMessage = draftMatchesProfile ? weightDraft.message : ''
+
+  function commitWeight() {
+    const result = commitWeightInput(weightInput, profile.weight)
+    setWeightDraft({
+      input: result.input,
+      message: result.message,
+      sourceWeight: result.weight,
+    })
+
+    if (result.weight !== profile.weight) {
+      onChange({ ...profile, weight: result.weight })
+    }
+  }
+
   return (
     <section className="panel profile-panel">
       <div className="panel-header">
-        <p className="eyebrow">Intake</p>
-        <h2>Jouw profiel</h2>
+        <div>
+          <p className="eyebrow">Intake</p>
+          <h2>Profiel</h2>
+        </div>
+        <span className="panel-badge">Lokaal opgeslagen</span>
       </div>
       <div className="form-grid">
         <label>
           Lichaamsgewicht
           <div className="input-row">
             <input
-              min="35"
-              max="180"
-              onChange={(event) =>
-                onChange({ ...profile, weight: Number(event.target.value) || defaultProfile.weight })
-              }
-              type="number"
-              value={profile.weight}
+              aria-describedby="weight-feedback"
+              aria-invalid={Boolean(weightMessage)}
+              inputMode="decimal"
+              onBlur={commitWeight}
+              onChange={(event) => {
+                setWeightDraft({
+                  input: event.target.value,
+                  message: '',
+                  sourceWeight: profile.weight,
+                })
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.currentTarget.blur()
+                }
+              }}
+              type="text"
+              value={weightInput}
             />
             <span>kg</span>
           </div>
+          <span
+            className={weightMessage ? 'field-message error' : 'field-message'}
+            id="weight-feedback"
+            role={weightMessage ? 'alert' : undefined}
+          >
+            {weightMessage || '35-180 kg'}
+          </span>
         </label>
         <SelectField
           label="Doel"
@@ -1049,37 +1282,253 @@ function SelectField<T extends string | number>({
   )
 }
 
-function parseSelectValue<T extends string | number>(value: string, options: readonly T[]) {
-  const sample = options[0]
-  const parsed = typeof sample === 'number' ? Number(value) : value
-  return parsed as T
-}
-
-function ProteinCard({
-  range,
-  weight,
-  goal,
+function KpiPanel({
+  metrics,
+  profile,
+  proteinRange,
 }: {
-  range: ReturnType<typeof getProteinRange>
-  weight: number
-  goal: Goal
+  metrics: DashboardMetrics
+  profile: Profile
+  proteinRange: ReturnType<typeof getProteinRange>
 }) {
   return (
-    <section className="panel protein-panel">
+    <section className="panel kpi-panel">
       <div className="panel-header">
-        <p className="eyebrow">Proteine</p>
-        <h2>{range.low}-{range.high} g per dag</h2>
+        <div>
+          <p className="eyebrow">KPI's</p>
+          <h2>Weekstatus</h2>
+        </div>
+        <span className={`load-badge load-${metrics.loadLabel.toLowerCase()}`}>{metrics.loadLabel}</span>
       </div>
-      <p>
-        Op basis van {weight} kg lichaamsgewicht en 1.6 tot 2.0 gram proteine per kg. Dit helpt bij
-        spierherstel, behoud van spiermassa en verzadiging tijdens {goal}.
-      </p>
-      <div className="macro-strip">
-        <span>4 maaltijden</span>
-        <strong>{range.perMeal} g</strong>
-        <span>per maaltijd</span>
+      <div className="kpi-grid">
+        <div className="kpi-card primary">
+          <span className="kpi-label">Werksets per week</span>
+          <strong>
+            {metrics.weeklySetLow}-{metrics.weeklySetHigh}
+          </strong>
+          <span>{metrics.exerciseCount} oefeningen in totaal</span>
+        </div>
+        <div className="kpi-card">
+          <span className="kpi-label">Training/rust</span>
+          <strong>
+            {metrics.trainingDays}/{metrics.restDays}
+          </strong>
+          <span>dagen per week</span>
+        </div>
+        <div className="kpi-card">
+          <span className="kpi-label">Proteine</span>
+          <strong>{metrics.proteinMidpoint} g</strong>
+          <span>
+            {proteinRange.low}-{proteinRange.high} g/dag
+          </span>
+        </div>
+        <div className="kpi-card">
+          <span className="kpi-label">Focusspieren</span>
+          <strong>{metrics.focusCount}</strong>
+          <span>
+            {goalLabel(profile.goal)}, {profile.level}
+          </span>
+        </div>
       </div>
     </section>
+  )
+}
+
+function RiskOverview({ items }: { items: RiskItem[] }) {
+  return (
+    <section className="panel risk-panel">
+      <div className="panel-header">
+        <div>
+          <p className="eyebrow">Risico</p>
+          <h2>Actielijst</h2>
+        </div>
+        <span className="panel-badge">{items.filter((item) => item.tone !== 'good').length} open</span>
+      </div>
+      <div className="risk-list">
+        {items.map((item) => (
+          <article className={`risk-item risk-${item.tone}`} key={item.id}>
+            <div>
+              <div className="risk-title-row">
+                <h3>{item.title}</h3>
+                <span>{item.status}</span>
+              </div>
+              <p>{item.detail}</p>
+            </div>
+            <button onClick={item.onAction} type="button">
+              {item.actionLabel}
+            </button>
+          </article>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function OperationsCharts({
+  data,
+  metrics,
+  proteinRange,
+}: {
+  data: LoadChartPoint[]
+  metrics: DashboardMetrics
+  proteinRange: ReturnType<typeof getProteinRange>
+}) {
+  const loadConclusion =
+    metrics.restDays <= 2
+      ? `Conclusie: ${metrics.loadLabel.toLowerCase()} volume met weinig rust; verlaag volume zodra prestaties dalen.`
+      : `Conclusie: ${metrics.loadLabel.toLowerCase()} volume met voldoende herstelruimte voor progressie.`
+  const proteinConclusion = `Conclusie: mik op ${proteinRange.perMeal} g per maaltijd om het dagdoel stabiel te halen.`
+
+  return (
+    <section className="section-block chart-section">
+      <div className="section-heading">
+        <div>
+          <p className="eyebrow">Grafieken</p>
+          <h2>Belasting en voeding</h2>
+        </div>
+        <p className="section-copy">
+          Weekcontrole op volume, rust en proteinedekking.
+        </p>
+      </div>
+      <div className="chart-grid">
+        <article className="chart-card">
+          <div className="chart-header">
+            <div>
+              <h3>Werksets per dag</h3>
+              <p>
+                Weektotaal {metrics.weeklySetLow}-{metrics.weeklySetHigh} sets
+              </p>
+            </div>
+            <span className="chart-unit">sets</span>
+          </div>
+          <LoadBarChart data={data} />
+          <div className="chart-legend">
+            <span>
+              <i className="legend-swatch training"></i>Training
+            </span>
+            <span>
+              <i className="legend-swatch rest"></i>Rust
+            </span>
+          </div>
+          <p className="chart-conclusion">{loadConclusion}</p>
+        </article>
+
+        <article className="chart-card">
+          <div className="chart-header">
+            <div>
+              <h3>Proteinedoel</h3>
+              <p>
+                Dagbereik {proteinRange.low}-{proteinRange.high} g
+              </p>
+            </div>
+            <span className="chart-unit">g/dag</span>
+          </div>
+          <ProteinRangeChart metrics={metrics} proteinRange={proteinRange} />
+          <div className="chart-legend">
+            <span>
+              <i className="legend-swatch target"></i>Doelbereik
+            </span>
+            <span>
+              <i className="legend-swatch midpoint"></i>Dagfocus
+            </span>
+          </div>
+          <p className="chart-conclusion">{proteinConclusion}</p>
+        </article>
+      </div>
+    </section>
+  )
+}
+
+function LoadBarChart({ data }: { data: LoadChartPoint[] }) {
+  const maxValue = Math.max(...data.map((point) => point.value), 1)
+
+  return (
+    <svg className="bar-chart" viewBox="0 0 360 190" role="img" aria-labelledby="load-chart-title">
+      <title id="load-chart-title">Werksets per dag</title>
+      <text className="axis-label" x="16" y="22">
+        sets
+      </text>
+      <line className="chart-gridline" x1="42" x2="336" y1="142" y2="142" />
+      <line className="chart-gridline" x1="42" x2="336" y1="92" y2="92" />
+      <line className="chart-gridline" x1="42" x2="336" y1="42" y2="42" />
+      <text className="axis-tick" x="18" y="146">
+        0
+      </text>
+      <text className="axis-tick" x="12" y="46">
+        {maxValue}
+      </text>
+      {data.map((point, index) => {
+        const x = 54 + index * 41
+        const barHeight =
+          point.kind === 'rest' ? 8 : Math.max(8, Math.round((point.value / maxValue) * 100))
+        const y = 142 - barHeight
+
+        return (
+          <g key={point.label}>
+            <rect
+              className={point.kind === 'training' ? 'chart-bar training' : 'chart-bar rest'}
+              height={barHeight}
+              rx="4"
+              width="24"
+              x={x}
+              y={y}
+            />
+            <text className="bar-value" x={x + 12} y={y - 7}>
+              {point.kind === 'training' ? point.value : 'R'}
+            </text>
+            <text className="axis-tick" x={x + 12} y="170">
+              {point.label}
+            </text>
+          </g>
+        )
+      })}
+    </svg>
+  )
+}
+
+function ProteinRangeChart({
+  metrics,
+  proteinRange,
+}: {
+  metrics: DashboardMetrics
+  proteinRange: ReturnType<typeof getProteinRange>
+}) {
+  const scaleMax = Math.ceil((proteinRange.high * 1.2) / 10) * 10
+  const chartStart = 54
+  const chartWidth = 256
+  const lowX = chartStart + (proteinRange.low / scaleMax) * chartWidth
+  const highX = chartStart + (proteinRange.high / scaleMax) * chartWidth
+  const midpointX = chartStart + (metrics.proteinMidpoint / scaleMax) * chartWidth
+
+  return (
+    <svg className="range-chart" viewBox="0 0 360 190" role="img" aria-labelledby="protein-chart-title">
+      <title id="protein-chart-title">Proteinedoel per dag</title>
+      <text className="axis-label" x="16" y="34">
+        gram
+      </text>
+      <line className="range-track" x1={chartStart} x2={chartStart + chartWidth} y1="94" y2="94" />
+      <rect className="range-target" height="18" rx="9" width={highX - lowX} x={lowX} y="85" />
+      <line className="range-midpoint" x1={midpointX} x2={midpointX} y1="70" y2="116" />
+      <circle className="range-dot" cx={midpointX} cy="94" r="7" />
+      <text className="axis-tick" x={chartStart} y="132">
+        0g
+      </text>
+      <text className="axis-tick" x={chartStart + chartWidth} y="132">
+        {scaleMax}g
+      </text>
+      <text className="range-label" x={lowX} y="72">
+        {proteinRange.low}g
+      </text>
+      <text className="range-label" x={highX} y="72">
+        {proteinRange.high}g
+      </text>
+      <text className="range-label midpoint" x={midpointX} y="52">
+        {metrics.proteinMidpoint}g focus
+      </text>
+      <text className="range-meal-label" x="180" y="164">
+        {proteinRange.perMeal} g per maaltijd bij 4 maaltijden
+      </text>
+    </svg>
   )
 }
 
@@ -1093,20 +1542,31 @@ function MuscleFilter({
   onChange: (value: Muscle | 'alles') => void
 }) {
   return (
-    <div className="filter-bar">
-      <button className={value === 'alles' ? 'active' : ''} onClick={() => onChange('alles')} type="button">
-        Alles
-      </button>
-      {muscles.map((muscle) => (
+    <div className="filter-panel">
+      <span className="filter-status">
+        Actief: {value === 'alles' ? 'alle spiergroepen' : muscleLabels[value]}
+      </span>
+      <div className="filter-bar" role="group" aria-label="Filter op spiergroep">
         <button
-          className={value === muscle ? 'active' : ''}
-          key={muscle}
-          onClick={() => onChange(muscle)}
+          aria-pressed={value === 'alles'}
+          className={value === 'alles' ? 'active' : ''}
+          onClick={() => onChange('alles')}
           type="button"
         >
-          {muscleLabels[muscle]}
+          Alles
         </button>
-      ))}
+        {muscles.map((muscle) => (
+          <button
+            aria-pressed={value === muscle}
+            className={value === muscle ? 'active' : ''}
+            key={muscle}
+            onClick={() => onChange(muscle)}
+            type="button"
+          >
+            {muscleLabels[muscle]}
+          </button>
+        ))}
+      </div>
     </div>
   )
 }
@@ -1156,8 +1616,12 @@ function TrainingDayCard({
         <p className="empty-state">Geen oefeningen binnen dit filter. Kies een andere spiergroep.</p>
       ) : (
         <div className="exercise-stack">
-          {day.exercises.map((exercise) => (
-            <ExerciseCard exercise={exercise} key={exercise.id} onSwap={() => onSwap(exercise)} />
+          {day.exercises.map((exercise, exerciseIndex) => (
+            <ExerciseCard
+              exercise={exercise}
+              key={`${exercise.id}-${exerciseIndex}`}
+              onSwap={() => onSwap(exercise)}
+            />
           ))}
         </div>
       )}
@@ -1325,6 +1789,16 @@ function dietLabel(diet: Diet) {
   }
 
   return labels[diet]
+}
+
+function goalLabel(goal: Goal) {
+  const labels: Record<Goal, string> = {
+    spiermassa: 'Spiermassa',
+    vetverlies: 'Vetverlies',
+    onderhoud: 'Onderhoud',
+  }
+
+  return labels[goal]
 }
 
 export default App

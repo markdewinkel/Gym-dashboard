@@ -1,25 +1,35 @@
 :root {
-  --text: #4f5865;
-  --muted: #697483;
-  --text-h: #111827;
-  --ink: #162033;
-  --bg: #f7f8f5;
-  --surface: #ffffff;
-  --surface-strong: #eef3ee;
-  --border: #dfe5df;
-  --accent: #1f7a5a;
-  --accent-bg: rgba(31, 122, 90, 0.11);
-  --accent-border: rgba(31, 122, 90, 0.45);
-  --focus: rgba(35, 131, 96, 0.28);
-  --primary-muscle: #d85d45;
-  --secondary-muscle: #f1ae55;
-  --body-base: #d9e1de;
-  --body-stroke: #b9c5c1;
-  --shadow-sm: 0 10px 30px rgba(31, 38, 52, 0.07);
+  --text: #cbd3cf;
+  --muted: #89948f;
+  --text-h: #f4f7f5;
+  --ink: #080b0a;
+  --bg: #0d1110;
+  --surface: #141a18;
+  --surface-strong: #1b2420;
+  --surface-soft: #111714;
+  --border: #2a3631;
+  --border-strong: #3c4a44;
+  --accent: #58d19e;
+  --accent-strong: #7be8ba;
+  --accent-bg: rgba(88, 209, 158, 0.13);
+  --accent-border: rgba(88, 209, 158, 0.52);
+  --focus: rgba(88, 209, 158, 0.3);
+  --warning: #e7b45c;
+  --warning-bg: rgba(231, 180, 92, 0.13);
+  --danger: #ef766d;
+  --danger-bg: rgba(239, 118, 109, 0.13);
+  --info: #7cb7f0;
+  --info-bg: rgba(124, 183, 240, 0.12);
+  --primary-muscle: #ef766d;
+  --secondary-muscle: #e7b45c;
+  --body-base: #26322d;
+  --body-stroke: #53635c;
+  --shadow-sm: 0 14px 36px rgba(0, 0, 0, 0.24);
 
   font: 16px/1.5 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   color: var(--text);
   background: var(--bg);
+  color-scheme: dark;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -64,19 +74,18 @@ h4 {
 }
 
 h1 {
-  max-width: 760px;
-  margin: 0 0 14px;
-  font-size: clamp(2.4rem, 6vw, 5.7rem);
+  margin: 0;
+  font-size: clamp(1.45rem, 2.2vw, 2rem);
   font-weight: 900;
 }
 
 h2 {
   margin: 0;
-  font-size: clamp(1.35rem, 2vw, 2rem);
+  font-size: clamp(1.05rem, 1.4vw, 1.35rem);
 }
 
 h3 {
-  font-size: 1.12rem;
+  font-size: 1rem;
 }
 
 h4 {
@@ -89,26 +98,4 @@ p {
 
 ul {
   margin-top: 8px;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --text: #c8d0d8;
-    --muted: #9aa8b6;
-    --text-h: #f7fafc;
-    --ink: #101723;
-    --bg: #111614;
-    --surface: #17201d;
-    --surface-strong: #202c27;
-    --border: #304039;
-    --accent: #55c99d;
-    --accent-bg: rgba(85, 201, 157, 0.14);
-    --accent-border: rgba(85, 201, 157, 0.5);
-    --focus: rgba(85, 201, 157, 0.32);
-    --primary-muscle: #f0715a;
-    --secondary-muscle: #efbb69;
-    --body-base: #31413a;
-    --body-stroke: #51635b;
-    --shadow-sm: 0 12px 32px rgba(0, 0, 0, 0.28);
-  }
 }
